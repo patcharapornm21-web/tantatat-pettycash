@@ -13,11 +13,12 @@ export function openSignaturePad(ctx, { title = "ลายเซ็นของ�
     const m = openModal(`
       <div class="modal-body">
         <div class="row between"><h3 class="modal-title">${esc(title)}</h3><button class="icon-btn" data-close aria-label="ปิด"><span class="material-symbols-outlined">close</span></button></div>
-        <p class="small muted" style="margin:0 0 .75rem">${esc(note) || "เซ็นชื่อในกรอบด้วยนิ้วหรือเมาส์ ระบบจะจดจำไว้และนำไปแสดงบนใบเบิกและรายงานให้อัตโนมัติ ไม่ต้องเซ็นใหม่"}</p>
+        <p class="small muted" style="margin:0 0 .75rem">${esc(note) || "เซ็นชื่อในกรอบด้วยนิ้วหรือเมาส์ หรืออัปโหลดรูปลายเซ็น (.png/.jpg) ระบบจะจดจำไว้และนำไปแสดงบนใบเบิกและรายงานให้อัตโนมัติ ไม่ต้องเซ็นใหม่"}</p>
         ${cur ? `<div class="small muted" style="margin-bottom:.35rem">ลายเซ็นปัจจุบัน</div><img src="${cur}" alt="ลายเซ็นปัจจุบัน" style="max-height:64px;border:1px dashed var(--line,#cbd5e1);border-radius:8px;padding:4px;margin-bottom:.75rem;background:#fff">` : ""}
         <div style="border:1.5px dashed var(--primary,#0ea5e9);border-radius:12px;background:#fff;touch-action:none"><canvas id="sg" style="width:100%;height:${H}px;display:block;touch-action:none;cursor:crosshair"></canvas></div>
         <div class="row" style="justify-content:space-between;margin-top:.75rem;gap:.5rem;flex-wrap:wrap">
-          <button class="btn ghost" id="sg-clear"><span class="material-symbols-outlined">ink_eraser</span>ล้าง</button>
+          <div class="row" style="gap:.5rem;flex-wrap:wrap"><button class="btn ghost" id="sg-clear"><span class="material-symbols-outlined">ink_eraser</span>ล้าง</button>
+            <label class="btn ghost" style="cursor:pointer"><span class="material-symbols-outlined">upload</span>อัปโหลดรูปลายเซ็น (.png / .jpg)<input type="file" id="sg-file" accept="image/png,image/jpeg" hidden></label></div>
           <div class="row" style="gap:.5rem"><button class="btn ghost" data-close>ยกเลิก</button><button class="btn ok" id="sg-save"><span class="material-symbols-outlined">draw</span>บันทึกลายเซ็น</button></div>
         </div>
       </div>`, { onClose: () => { if (!done) { done = true; resolve(null); } } });
@@ -29,6 +30,24 @@ export function openSignaturePad(ctx, { title = "ลายเซ็นของ�
     cv.addEventListener("pointermove", (e) => { if (!drawing) return; const p = pos(e); g.beginPath(); g.moveTo(last.x, last.y); g.lineTo(p.x, p.y); g.stroke(); last = p; e.preventDefault(); });
     ["pointerup", "pointercancel", "pointerleave"].forEach((ev) => cv.addEventListener(ev, () => { drawing = false; }));
     m.el.querySelector("#sg-clear").onclick = () => { g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); g.restore(); dirty = false; };
+    // อัปโหลดรูปลายเซ็น: วางลงกรอบ + ทำพื้นขาวให้โปร่งใส (ดูตัวอย่างก่อนกดบันทึก)
+    m.el.querySelector("#sg-file").onchange = async (e) => {
+      const file = e.target.files[0]; e.target.value = "";
+      if (!file) return;
+      if (!/^image\/(png|jpeg)$/.test(file.type)) return toast("รองรับเฉพาะไฟล์ .png หรือ .jpg", "warn");
+      if (file.size > 8 * 1024 * 1024) return toast("ไฟล์ใหญ่เกิน 8MB", "warn");
+      try {
+        const img = await new Promise((res, rej) => { const u = URL.createObjectURL(file); const im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => rej(new Error("อ่านไฟล์รูปไม่ได้")); im.src = u; });
+        const r = cv.getBoundingClientRect(); const k = Math.max(1, window.devicePixelRatio || 1);
+        g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, cv.width, cv.height); g.restore();
+        const sc = Math.min((r.width - 16) / img.width, (H - 16) / img.height, 1.5); const w = img.width * sc, h = img.height * sc;
+        g.drawImage(img, (r.width - w) / 2, (H - h) / 2, w, h);
+        const id = g.getImageData(0, 0, cv.width, cv.height); const p = id.data;
+        for (let i = 0; i < p.length; i += 4) { const lum = 0.3 * p[i] + 0.59 * p[i + 1] + 0.11 * p[i + 2]; if (lum > 225) p[i + 3] = 0; else if (lum > 170) p[i + 3] = Math.round(p[i + 3] * (225 - lum) / 55); }
+        g.putImageData(id, 0, 0); dirty = true;
+        toast("โหลดรูปแล้ว — ตรวจตัวอย่างในกรอบ แล้วกด “บันทึกลายเซ็น”", "info");
+      } catch (err) { toast(err.message, "err"); }
+    };
     m.el.querySelector("#sg-save").onclick = async () => {
       if (!dirty) return toast("กรุณาเซ็นชื่อในกรอบก่อน", "warn");
       const data = exportTrimmed(cv);
