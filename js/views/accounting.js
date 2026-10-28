@@ -1,7 +1,7 @@
 // Central Accounting Console — ภาพรวม 100 สาขาจาก Summary Document (อ่านแค่ 1 เอกสาร) + Real-time
 import { esc, baht, money, thDate, statusChip, debounce, branchLabel, isOpen, $, $$, round2 } from "../utils.js";
 import { pageHeader, toast, openModal, busy, friendlyError, isSoundOn, setSound, beep, confirmDialog } from "../ui.js";
-import { resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
+import { renumberBranchMonth, resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
 import { openReplenishModal } from "./replenish.js";
 import { APP_SETTINGS } from "../firebase-config.js";
 import { bus } from "../app.js";
@@ -199,8 +199,16 @@ export default async function view(root, ctx) {
   function openSettings() {
     const m = openModal(`<div class="modal-body"><h3 class="modal-title">ตั้งค่าระบบ</h3>
       <label class="row" style="gap:.6rem;align-items:flex-start"><input type="checkbox" id="c-neg" ${ctx.settings.allowNegative !== false ? "checked" : ""} style="margin-top:4px">
-        <span><b>อนุญาตให้ยอดเงินสดคงเหลือติดลบ</b><br><span class="small muted">กรณีสาขาสำรองจ่ายเอง แล้วบริษัทโอนชดเชยทั้งเดือนภายหลัง ถ้าปิด ระบบจะไม่ให้เบิกเกินยอดคงเหลือ</span></span></label></div>
+        <span><b>อนุญาตให้ยอดเงินสดคงเหลือติดลบ</b><br><span class="small muted">กรณีสาขาสำรองจ่ายเอง แล้วบริษัทโอนชดเชยทั้งเดือนภายหลัง ถ้าปิด ระบบจะไม่ให้เบิกเกินยอดคงเหลือ</span></span></label>
+      <hr style="border:0;border-top:1px solid #e2e8f0;margin:1rem 0">
+      <b>เรียงเลขที่เอกสารใหม่ตามวันที่ในเอกสาร</b><div class="small muted" style="margin:.25rem 0 .5rem">ระบบเรียงให้อัตโนมัติทุกครั้งที่สาขาส่งใบใหม่ — ปุ่มนี้ใช้จัดเลขของใบเก่าที่สร้างไว้ก่อนอัปเดต (ทุกสาขาที่เปิด ตามเดือนที่เลือก)</div>
+      <div class="row" style="gap:.5rem"><input class="inp" id="c-rm" type="month" value="${new Date().toISOString().slice(0, 7)}" style="max-width:180px"><button class="btn ghost" id="c-rn"><span class="material-symbols-outlined">format_list_numbered</span>เรียงเลขใหม่</button></div><div class="small muted" id="c-rp"></div></div>
       <div class="modal-foot"><button class="btn ghost" data-close>ยกเลิก</button><button class="btn sky" id="c-go">บันทึก</button></div>`);
+    m.el.querySelector("#c-rn").onclick = async () => {
+      const ym = m.el.querySelector("#c-rm").value; if (!ym) return;
+      const ids = Object.values(ctx.summary || {}).filter((x) => x && x.id && isOpen(x)).map((x) => x.id); let n = 0;
+      try { await busy(async () => { for (const id of ids) { await renumberBranchMonth(id, ym); m.el.querySelector("#c-rp").textContent = `จัดเลขแล้ว ${++n}/${ids.length} สาขา`; } }, "กำลังจัดเลข…"); toast(`เรียงเลขที่เอกสารเดือน ${ym} เรียบร้อย`, "ok"); } catch (e) { toast(friendlyError(e), "err", 7000); }
+    };
     m.el.querySelector("#c-go").onclick = async () => {
       try { await busy(() => saveSettings({ allowNegative: m.el.querySelector("#c-neg").checked })); toast("บันทึกการตั้งค่าแล้ว", "ok"); m.close(); } catch (e) { toast(friendlyError(e), "err", 7000); }
     };

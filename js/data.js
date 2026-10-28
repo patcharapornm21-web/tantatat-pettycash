@@ -184,7 +184,7 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
   const ym = editReq ? editReq.month : monthKey(form.date);
   const now = Date.now();
 
-  return runTransaction(db, async (tx) => {
+  const res = await runTransaction(db, async (tx) => {
     const bSnap = await tx.get(branchRef(bid));
     if (!bSnap.exists()) throw new Error("ยังไม่มีข้อมูลสาขานี้ในระบบ กรุณาแจ้งฝ่ายบัญชีให้ Seed สาขาก่อน");
     const b = bSnap.data();
@@ -242,6 +242,28 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
     tx.update(summaryRef(), { [`${bid}.pendingAmt`]: increment(dPend), [`${bid}.pendingCnt`]: increment(dCnt), [`${bid}.balance`]: increment(-dDeduct) });
     return { id, docNo, total };
   });
+  if (!editReq) { // เลขที่เอกสารเรียงตามวันที่ในเอกสาร: ใบที่ลงวันที่ก่อนจะได้เลขก่อน (ใบหลังขยับเลขตาม)
+    try { const map = await renumberBranchMonth(bid, ym); if (map[res.id]) res.docNo = map[res.id]; } catch (e) { console.warn("renumber", e); }
+  }
+  return res;
+}
+
+/**
+ * จัดเลขที่เอกสารของสาขา+เดือน ใหม่ตาม (วันที่ในเอกสาร, ลำดับที่สร้าง) — รวมใบที่ยกเลิก (เลขที่ยังคงอยู่)
+ * คืนค่า { [requestId]: docNo }
+ */
+export async function renumberBranchMonth(bid, ym) {
+  const bs = await getDoc(branchRef(bid)); const abbr = bs.exists() ? bs.data().abbr || "B" + bid : "B" + bid;
+  const s = await getDocs(query(collection(db, "requests"), where("branchId", "==", bid), where("month", "==", ym), limit(500)));
+  const rows = s.docs.map((x) => ({ ref: x.ref, id: x.id, ...x.data() }))
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || a.id.localeCompare(b.id));
+  const map = {}; const now = Date.now(); let b = writeBatch(db), n = 0;
+  rows.forEach((r, i) => {
+    const no = makeDocNo(abbr, ym, i + 1); map[r.id] = no;
+    if (r.docNo !== no) { b.update(r.ref, { docNo: no, docNoHistory: arrayUnion({ from: r.docNo || "", to: no, at: now }) }); n++; }
+  });
+  if (n) await b.commit();
+  return map;
 }
 
 /** สาขายกเลิกเอกสาร (เลขที่เอกสารยังคงอยู่ ไม่ถูกนำกลับมาใช้) — ต้องระบุเหตุผล */
