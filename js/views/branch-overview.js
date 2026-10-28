@@ -12,6 +12,7 @@ export default async function view(root, ctx) {
   const draw = () => {
     const b = ctx.branch;
     if (!b) { root.innerHTML = pageHeader({ title: "ภาพรวมสาขา" }) + `<div class="notice warn"><span class="material-symbols-outlined">hourglass_top</span><div>กำลังโหลดข้อมูลสาขา… ถ้าไม่ขึ้น แปลว่าฝ่ายบัญชียังไม่ได้ Seed สาขา ${esc(ctx.profile.branchId)}</div></div>`; return; }
+    if (b.open !== true) { root.innerHTML = pageHeader({ title: "ภาพรวมสาขา", live: false }) + `<div class="notice warn"><span class="material-symbols-outlined">lock</span><div><b>สาขา ${esc(b.name)} ยังไม่เปิดใช้งาน</b><br>กรุณาติดต่อฝ่ายบัญชีส่วนกลางเพื่อเปิดสาขาก่อนเริ่มใช้งาน</div></div>`; return; }
     const fl = Number(b.float) || 0, bal = Number(b.balance) || 0;
     const used = fl - bal;
     const pct = fl > 0 ? Math.max(0, Math.min(100, (bal / fl) * 100)) : 0;
@@ -22,7 +23,7 @@ export default async function view(root, ctx) {
 
     root.innerHTML = pageHeader({
       title: "ภาพรวมสาขา",
-      crumb: `<span class="material-symbols-outlined" style="font-size:14px">location_on</span> ${esc(b.name)} <span class="tag">${esc(b.id)}</span>`,
+      crumb: `<span class="material-symbols-outlined" style="font-size:14px">location_on</span> ${esc(String(b.name).startsWith(b.id) ? b.name : b.id + "-" + b.name)}`,
       actions: `<a class="btn sky" href="#/new"><span class="material-symbols-outlined">add</span>ขอเบิกเงินสดย่อย</a>`,
     }) + `
     ${returned.length ? `<div class="notice warn" style="margin-bottom:1.25rem"><span class="material-symbols-outlined">undo</span>

@@ -1,15 +1,15 @@
-import { esc, baht, money, thDate, thMonth, lastMonths, curMonth, statusChip, STATUS, debounce, $, $$ } from "../utils.js";
+import { branchLabel, isOpen, esc, baht, money, thDate, thMonth, lastMonths, curMonth, statusChip, STATUS, debounce, $, $$ } from "../utils.js";
 import { pageHeader, toast, friendlyError } from "../ui.js";
 import { queryRequests } from "../data.js";
 
 export default async function view(root, ctx) {
   const role = ctx.role;
   const st = { month: role === "accounting" ? "" : curMonth(), status: "", branchId: "", q: "", rows: [], loading: false };
-  const branches = () => role === "accounting" ? Object.values(ctx.summary || {}).filter((b) => b && b.id).sort((a, b) => (a.id > b.id ? 1 : -1))
-    : role === "approver" ? (ctx.regionBranches || []).slice().sort((a, b) => (a.id > b.id ? 1 : -1)) : [];
+  const branches = () => (role === "accounting" ? Object.values(ctx.summary || {}).filter((b) => b && b.id)
+    : role === "approver" ? (ctx.regionBranches || []) : []).filter(isOpen).sort((a, b) => (a.id > b.id ? 1 : -1));
 
   root.innerHTML = pageHeader({
-    title: role === "branch" ? "รายการของฉัน" : role === "approver" ? `ใบเบิกทั้งเขต ${esc(ctx.profile.region || "")}` : "ใบเบิกทั้งหมด", live: false,
+    title: role === "branch" ? "รายการของฉัน" : role === "approver" ? "ใบเบิกสาขาที่ดูแล" : "ใบเบิกทั้งหมด", live: false,
     crumb: "รายการใบเบิก",
     actions: role === "branch" ? `<a class="btn sky" href="#/new"><span class="material-symbols-outlined">add</span>ขอเบิก</a>` : "",
   }) + `
@@ -17,7 +17,7 @@ export default async function view(root, ctx) {
     <div class="filters" style="padding:1.25rem 1.5rem">
       <div class="field"><label>เดือน</label><select class="inp" id="m">${role === "accounting" ? `<option value="">ล่าสุด 100 รายการ</option>` : ""}${lastMonths(18).map((m) => `<option value="${m}" ${m === st.month ? "selected" : ""}>${thMonth(m)}</option>`).join("")}</select></div>
       <div class="field"><label>สถานะ</label><select class="inp" id="s"><option value="">ทุกสถานะ</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("")}</select></div>
-      ${role !== "branch" ? `<div class="field"><label>สาขา</label><select class="inp" id="b"><option value="">ทุกสาขา</option>${branches().map((b) => `<option value="${esc(b.id)}">${esc(b.id)} ${esc(b.name)}</option>`).join("")}</select></div>` : ""}
+      ${role !== "branch" ? `<div class="field"><label>สาขา</label><select class="inp" id="b"><option value="">ทุกสาขา</option>${branches().map((b) => `<option value="${esc(b.id)}">${esc(branchLabel(b))}</option>`).join("")}</select></div>` : ""}
       <div class="field grow" style="min-width:200px"><label>ค้นหาในผลลัพธ์</label><div class="search"><span class="material-symbols-outlined">search</span><input class="inp" id="q" placeholder="เลขที่เอกสาร / ผู้ขอเบิก / สาขา"></div></div>
       <button class="btn ghost" id="rf"><span class="material-symbols-outlined">refresh</span>โหลดใหม่</button>
     </div>

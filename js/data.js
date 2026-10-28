@@ -10,7 +10,7 @@ import {
   db, doc, collection, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot,
   query, where, orderBy, limit, increment, serverTimestamp, writeBatch, runTransaction, arrayUnion,
 } from "./fb.js";
-import { makeDocNo, monthKey, round2 } from "./utils.js";
+import { makeDocNo, monthKey, round2, STATUS } from "./utils.js";
 import { uploadToCloudinary, cloudinaryEnabled } from "./image.js";
 
 export const summaryRef = () => doc(db, "meta", "summary");
@@ -62,8 +62,9 @@ export const subRequest = (id, cb, err) =>
 // ------------------------------------------------------------------
 //  Seed / จัดการสาขา
 // ------------------------------------------------------------------
-/** สร้างสาขา 001..N (ข้ามสาขาที่มีอยู่แล้ว) — เขียน 1 summary + N branches ด้วย batch */
-export async function seedBranches({ count = 100, floatAmt = 5000, perRegion = 10, namePattern = "สาขา {n}" }) {
+/** สร้างสาขา 001..N (ข้ามสาขาที่มีอยู่แล้ว) — เขียน 1 summary + N branches ด้วย batch
+ *  openFirst = เปิดใช้งานกี่สาขาแรก (สาขาที่ยังไม่เปิดจะเบิกไม่ได้/คนอื่นมองไม่เห็นจนกว่าบัญชีจะเปิด) */
+export async function seedBranches({ count = 100, floatAmt = 5000, openFirst = 10, namePattern = "สาขา {n}" }) {
   const snap = await getDoc(summaryRef());
   const existing = snap.exists() ? snap.data() : {};
   const toAdd = {};
@@ -71,14 +72,8 @@ export async function seedBranches({ count = 100, floatAmt = 5000, perRegion = 1
     const id = pad3(i);
     if (existing[id]) continue;
     toAdd[id] = {
-      id,
-      name: namePattern.replace("{n}", id),
-      abbr: "B" + id,
-      region: "R" + pad3(Math.ceil(i / perRegion)).slice(1),
-      float: Number(floatAmt),
-      balance: Number(floatAmt),
-      pendingAmt: 0,
-      pendingCnt: 0,
+      id, name: namePattern.replace("{n}", id), abbr: "B" + id, region: "-",
+      float: Number(floatAmt), balance: Number(floatAmt), pendingAmt: 0, pendingCnt: 0, open: i <= openFirst,
     };
   }
   const ids = Object.keys(toAdd);
@@ -90,13 +85,50 @@ export async function seedBranches({ count = 100, floatAmt = 5000, perRegion = 1
   return { added: ids.length, skipped: count - ids.length };
 }
 
-export async function updateBranchInfo(id, { name, abbr, region, float }) {
-  const patch = { name, abbr, region, float: Number(float) };
+/** แก้ข้อมูลสาขา — ถ้าเปลี่ยนวงเงินและติ๊ก adjustBalance จะปรับยอดคงเหลือตามส่วนต่างวงเงินด้วย */
+export async function updateBranchInfo(id, { name, abbr, float, balance, open }, { adjustBalanceBy = 0 } = {}) {
+  const patch = {};
+  if (name !== undefined) patch.name = name;
+  if (abbr !== undefined) patch.abbr = abbr;
+  if (float !== undefined) patch.float = Number(float);
+  if (open !== undefined) patch.open = !!open;
+  if (balance !== undefined && balance !== null && balance !== "" && !isNaN(Number(balance))) patch.balance = Number(balance);
+  else if (adjustBalanceBy) patch.balance = increment(adjustBalanceBy);
   const batch = writeBatch(db);
   batch.update(branchRef(id), patch);
   batch.update(summaryRef(), Object.fromEntries(Object.entries(patch).map(([k, v]) => [`${id}.${k}`, v])));
   await batch.commit();
 }
+
+/** เปิด/ปิดสาขาหลายแห่งพร้อมกัน */
+export async function setBranchesOpen(ids, open) {
+  for (let i = 0; i < ids.length; i += 200) {
+    const batch = writeBatch(db);
+    ids.slice(i, i + 200).forEach((id) => {
+      batch.update(branchRef(id), { open: !!open });
+      batch.update(summaryRef(), { [`${id}.open`]: !!open });
+    });
+    await batch.commit();
+  }
+}
+
+/** กำหนดสาขาให้ ROM (region = รหัสกลุ่มของ ROM คนนั้น) — ย้ายใบเบิกที่ยังค้างอยู่ตามไปด้วย */
+export async function assignBranchRegions(changes /* [{id, region}] */) {
+  for (const { id, region } of changes) {
+    const open = await getDocs(query(collection(db, "requests"), where("branchId", "==", id), where("status", "in", ["pending", "returned"]), limit(100)));
+    const ops = [];
+    ops.push((b) => { b.update(branchRef(id), { region }); b.update(summaryRef(), { [`${id}.region`]: region }); });
+    open.docs.forEach((d) => {
+      ops.push((b) => b.update(d.ref, { region }));
+      (d.data().items || []).forEach((it, i) => { if (it.hasReceipt) ops.push((b) => b.update(doc(db, "receipts", receiptId(d.id, i)), { region })); });
+    });
+    for (let i = 0; i < ops.length; i += 400) { const b = writeBatch(db); ops.slice(i, i + 400).forEach((f) => f(b)); await b.commit(); }
+  }
+}
+
+// ----- ตั้งค่าระบบ (meta/settings) -----
+export const subSettings = (cb, err) => onSnapshot(doc(db, "meta", "settings"), (s) => cb(s.exists() ? s.data() : {}), err);
+export const saveSettings = (data) => setDoc(doc(db, "meta", "settings"), data, { merge: true });
 
 // ------------------------------------------------------------------
 //  ใบเบิก
@@ -117,10 +149,12 @@ export async function loadReceipts(req) {
  * ส่งใบเบิกใหม่ หรือ ส่งซ้ำหลังถูกตีกลับ (editReq)
  * form = { date, note, items:[{desc,category,qty,amount,receipt(dataURL|null)}] }
  */
-export async function submitRequest(profile, branch, form, editReq = null) {
+export async function submitRequest(profile, branch, form, editReq = null, settings = null) {
   const items = form.items.map((it) => ({
-    desc: it.desc.trim(), category: it.category, qty: Number(it.qty) || 1, unitPrice: round2(it.unitPrice ?? it.amount),
+    date: it.date, docType: it.docType, category: it.category, supplier: (it.supplier || "").trim(),
+    requester: (it.requester || "").trim(), note: (it.note || "").trim(),
     amount: round2(it.amount), hasReceipt: !!it.receipt,
+    ...(it.wht && it.wht.rate ? { wht: { rate: Number(it.wht.rate), before: round2(it.wht.before), amount: round2(it.wht.amount) } } : {}),
   }));
   const total = round2(items.reduce((s, i) => s + i.amount, 0));
   if (!items.length || total <= 0) throw new Error("กรุณาเพิ่มรายการอย่างน้อย 1 รายการ และยอดรวมต้องมากกว่า 0");
@@ -134,6 +168,7 @@ export async function submitRequest(profile, branch, form, editReq = null) {
     else receiptPayload.push({ url: await uploadToCloudinary(r) });
   }
 
+  if (editReq && !(form.editReason || "").trim()) throw new Error("กรุณาระบุเหตุผลที่แก้ไขเอกสาร");
   const bid = profile.branchId;
   const ym = editReq ? editReq.month : monthKey(form.date);
   const now = Date.now();
@@ -142,9 +177,23 @@ export async function submitRequest(profile, branch, form, editReq = null) {
     const bSnap = await tx.get(branchRef(bid));
     if (!bSnap.exists()) throw new Error("ยังไม่มีข้อมูลสาขานี้ในระบบ กรุณาแจ้งฝ่ายบัญชีให้ Seed สาขาก่อน");
     const b = bSnap.data();
+    if (b.open !== true) throw new Error("สาขานี้ยังไม่เปิดใช้งาน กรุณาติดต่อฝ่ายบัญชี");
+    // ยอดที่ต้องหักเพิ่มจากยอดคงเหลือ: ใบใหม่/ใบที่ถูกคืนยอดแล้ว = ทั้งใบ, ใบที่หักไปแล้ว (รออนุมัติ/อนุมัติแล้ว) = เฉพาะส่วนต่าง
+    let cur = null;
+    if (editReq) {
+      const cs = await tx.get(requestRef(editReq.id));
+      if (!cs.exists()) throw new Error("ไม่พบใบเบิกนี้");
+      cur = cs.data();
+      if (!["pending", "returned", "approved"].includes(cur.status)) throw new Error("เอกสารนี้แก้ไขไม่ได้แล้ว (สถานะ: " + (STATUS[cur.status]?.label || cur.status) + ")");
+    }
+    const held = cur && cur.status !== "returned" ? cur.total : 0;
+    const dDeduct = round2(total - held);
+    if (settings && settings.allowNegative === false && dDeduct > 0 && (Number(b.balance) || 0) - dDeduct < 0) throw new Error("ยอดเบิกเกินยอดคงเหลือ และระบบตั้งค่าไม่อนุญาตให้ยอดติดลบ");
 
     let id, docNo;
-    const bPatch = { pendingAmt: increment(total), pendingCnt: increment(1), balance: increment(-total) }; // เบิก = หักยอดคงเหลือทันที
+    const dPend = cur ? (cur.status === "pending" ? total - cur.total : total) : total;
+    const dCnt = cur && cur.status === "pending" ? 0 : 1;
+    const bPatch = { pendingAmt: increment(dPend), pendingCnt: increment(dCnt), balance: increment(-dDeduct) }; // เบิก = หักยอดคงเหลือทันที
     if (editReq) {
       id = editReq.id; docNo = editReq.docNo;
     } else {
@@ -154,8 +203,9 @@ export async function submitRequest(profile, branch, form, editReq = null) {
       bPatch[`seq.${ym}`] = seq;
     }
 
-    const history = [...(editReq?.history || []), {
-      action: editReq ? "resubmit" : "submit", by: profile.name, role: "branch", at: now, comment: "",
+    const history = [...(cur?.history || []), {
+      action: editReq ? (cur.status === "returned" ? "resubmit" : "edited") : "submit", by: profile.name, role: "branch", at: now,
+      comment: editReq ? form.editReason.trim() : "",
     }];
     const base = {
       docNo, branchId: bid, branchName: b.name, region: b.region, month: ym,
@@ -163,6 +213,7 @@ export async function submitRequest(profile, branch, form, editReq = null) {
       requesterUid: profile.uid, requesterName: profile.name,
       items, total, status: "pending", history, comment: "",
       createdAt: editReq ? editReq.createdAt : serverTimestamp(), updatedAt: now,
+      ...(editReq ? { editCount: (cur.editCount || 0) + 1, lastEditReason: form.editReason.trim() } : {}),
     };
     tx.set(requestRef(id), base);
 
@@ -175,8 +226,30 @@ export async function submitRequest(profile, branch, form, editReq = null) {
     }
 
     tx.update(branchRef(bid), bPatch);
-    tx.update(summaryRef(), { [`${bid}.pendingAmt`]: increment(total), [`${bid}.pendingCnt`]: increment(1), [`${bid}.balance`]: increment(-total) });
+    tx.update(summaryRef(), { [`${bid}.pendingAmt`]: increment(dPend), [`${bid}.pendingCnt`]: increment(dCnt), [`${bid}.balance`]: increment(-dDeduct) });
     return { id, docNo, total };
+  });
+}
+
+/** สาขายกเลิกเอกสาร (เลขที่เอกสารยังคงอยู่ ไม่ถูกนำกลับมาใช้) — ต้องระบุเหตุผล */
+export async function cancelRequest(reqId, reason, profile) {
+  if (!reason?.trim()) throw new Error("กรุณาระบุเหตุผลที่ยกเลิกเอกสาร");
+  return runTransaction(db, async (tx) => {
+    const s = await tx.get(requestRef(reqId));
+    if (!s.exists()) throw new Error("ไม่พบใบเบิกนี้");
+    const r = s.data();
+    if (r.branchId !== profile.branchId) throw new Error("ยกเลิกได้เฉพาะเอกสารของสาขาตัวเอง");
+    if (!["pending", "returned", "approved"].includes(r.status)) throw new Error("เอกสารนี้ยกเลิกไม่ได้แล้ว (สถานะ: " + (STATUS[r.status]?.label || r.status) + ")");
+    const now = Date.now();
+    const history = [...(r.history || []), { action: "cancelled", by: profile.name, role: "branch", at: now, comment: reason.trim() }];
+    tx.update(requestRef(reqId), { status: "cancelled", history, comment: reason.trim(), cancelReason: reason.trim(), decidedByName: profile.name, updatedAt: now });
+    if (r.status !== "returned") { // คืนยอดที่หักไปแล้ว
+      const bp = { balance: increment(r.total) };
+      if (r.status === "pending") { bp.pendingAmt = increment(-r.total); bp.pendingCnt = increment(-1); }
+      tx.update(branchRef(r.branchId), bp);
+      tx.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${r.branchId}.${k}`, v])));
+    }
+    return r;
   });
 }
 

@@ -252,3 +252,10 @@ table.tbl{width:100%;border-collapse:collapse}
   .side,.mtop,.dock,.topbar .btn,.no-print,#toasts{display:none!important}
   body{background:#fff} .main{margin:0;padding:0} .card{box-shadow:none;border:1px solid #ddd;backdrop-filter:none}
 }
+
+/* ---------- Switch ---------- */
+.sw{position:relative;display:inline-block;width:40px;height:22px;cursor:pointer}
+.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw i{position:absolute;inset:0;border-radius:99px;background:#cbd5e1;transition:.2s}
+.sw i::after{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:.2s}
+.sw input:checked+i{background:var(--secondary)} .sw input:checked+i::after{transform:translateX(18px)}

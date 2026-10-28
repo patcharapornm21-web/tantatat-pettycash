@@ -1,7 +1,7 @@
 // แกนกลางของ SPA: Auth → โปรไฟล์/สิทธิ์ → Layout (Sidebar/Dock) → Router (hash)
 import { auth, onAuthStateChanged, signOut } from "./fb.js";
 import { isConfigured, APP_SETTINGS } from "./firebase-config.js";
-import { getProfile, subBranch, subPending, subBranchMonth, subBranchOpen, subRegionBranches, subSummary } from "./data.js";
+import { getProfile, subSettings, subBranch, subPending, subBranchMonth, subBranchOpen, subRegionBranches, subSummary } from "./data.js";
 import { esc, $, $$, curMonth, baht, ROLE_LABEL, statusChip } from "./utils.js";
 import { toast, beep, friendlyError } from "./ui.js";
 
@@ -20,6 +20,7 @@ export const ctx = {
   regionBranches: null,    // สาขาในเขต (ผู้อนุมัติ)
   pending: [],             // ใบเบิกรออนุมัติ (ฝ่ายบัญชี=ทั้งหมด / ผู้อนุมัติ=ในเขต)
   branchReqs: [],          // ใบเบิกของสาขา (เดือนปัจจุบัน + งานค้าง)
+  settings: { ...APP_SETTINGS.defaultSettings }, // ตั้งค่าระบบ (meta/settings)
   live: false,
   nav: (h) => { location.hash = h; },
   bus,
@@ -82,13 +83,14 @@ function stopSession() {
   sessionUnsubs.forEach((u) => { try { u(); } catch {} });
   sessionUnsubs = [];
   if (viewCleanup) { try { viewCleanup(); } catch {} viewCleanup = null; }
-  Object.assign(ctx, { profile: null, role: null, branch: null, summary: null, regionBranches: null, pending: [], branchReqs: [], live: false });
+  Object.assign(ctx, { settings: { ...APP_SETTINGS.defaultSettings }, profile: null, role: null, branch: null, summary: null, regionBranches: null, pending: [], branchReqs: [], live: false });
 }
 
 function startSession(profile) {
   ctx.profile = profile; ctx.role = profile.role;
   const onErr = (e) => { console.error(e); toast(friendlyError(e), "err", 6000); };
   let firstPending = true;
+  sessionUnsubs.push(subSettings((st) => { ctx.settings = { ...APP_SETTINGS.defaultSettings, ...st }; bus.emit("settings", ctx.settings); }, () => {}));
 
   if (profile.role === "branch") {
     sessionUnsubs.push(subBranch(profile.branchId, (b) => { ctx.branch = b; ctx.live = true; bus.emit("branch", b); renderBadges(); }, onErr));
@@ -118,7 +120,7 @@ function startSession(profile) {
   } else {
     // ผู้อนุมัติ/ฝ่ายบัญชี: ฟังคิวรออนุมัติแบบ Real-time ตลอดเวลา ไม่ว่าอยู่หน้าไหน
     const region = profile.role === "approver" ? profile.region : null;
-    if (profile.role === "approver" && !region) toast("บัญชีผู้อนุมัติยังไม่ได้กำหนด “เขต” กรุณาแจ้งฝ่ายบัญชี", "warn", 8000);
+    if (profile.role === "approver" && !region) toast("บัญชี ROM ยังไม่ได้กำหนดสาขาที่ดูแล กรุณาแจ้งฝ่ายบัญชี", "warn", 8000);
     else sessionUnsubs.push(subPending(region, (list, added) => {
       ctx.pending = list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); ctx.live = true;
       if (!firstPending && added.length) {
@@ -185,7 +187,7 @@ function buildShell() {
       <div class="stack" style="gap:.6rem">
         <div class="userbox"><div class="avatar">${esc(initials)}</div>
           <div class="u grow" style="min-width:0"><b style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name || p.email)}</b>
-            <span class="small muted">${ROLE_LABEL[p.role]}${p.role === "branch" ? " · " + esc(p.branchId) : p.role === "approver" ? " · เขต " + esc(p.region || "-") : ""}</span></div></div>
+            <span class="small muted">${ROLE_LABEL[p.role]}${p.role === "branch" ? " · " + esc(p.branchId) : ""}</span></div></div>
         <button class="btn ghost sm" id="logout"><span class="material-symbols-outlined">logout</span><span class="hide-sm">ออกจากระบบ</span></button>
       </div>
     </aside>

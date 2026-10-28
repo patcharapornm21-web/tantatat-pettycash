@@ -1,11 +1,11 @@
 import { esc, baht, money, thDate, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
-import { subRequest, loadReceipts, decideRequest } from "../data.js";
-import { pageHeader, toast, busy, friendlyError, confirmDialog } from "../ui.js";
+import { subRequest, loadReceipts, decideRequest, cancelRequest } from "../data.js";
+import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
 import { zoom } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
 import { bus } from "../app.js";
 
-const ACTION_LABEL = { submit: "ส่งใบเบิก", resubmit: "แก้ไขและส่งใหม่", approved: "อนุมัติ", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข", replenished: "โอนชดเชย" };
+const ACTION_LABEL = { submit: "ส่งใบเบิก", resubmit: "แก้ไขและส่งใหม่", approved: "อนุมัติ", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข", replenished: "โอนชดเชย", edited: "แก้ไขและส่งอนุมัติใหม่", cancelled: "ยกเลิกเอกสาร" };
 
 export default async function view(root, ctx, { params }) {
   const id = params[0];
@@ -19,13 +19,14 @@ export default async function view(root, ctx, { params }) {
     const r = req; const st = r.status;
     const back = ctx.role === "branch" ? "#/overview" : "#/overview";
     const mine = ctx.role === "branch" && r.branchId === ctx.profile.branchId;
-    const s2 = st === "pending" ? "cur" : st === "rejected" ? "bad" : st === "returned" ? "rev" : "done";
+    const s2 = st === "pending" ? "cur" : (st === "rejected" || st === "cancelled") ? "bad" : st === "returned" ? "rev" : "done";
     const s3 = st === "replenished" ? "done" : st === "approved" ? "cur" : "";
     root.innerHTML = pageHeader({
       title: `รายละเอียดใบเบิก`,
       crumb: `<a href="${back}">ภาพรวม</a> › <a href="#/requests">ใบเบิก</a> › ${esc(r.docNo)}`,
       actions: `<button class="btn ghost no-print" id="print"><span class="material-symbols-outlined">print</span>พิมพ์ / PDF</button>
-        ${mine && st === "returned" ? `<a class="btn sky" href="#/new/${r.id}"><span class="material-symbols-outlined">edit</span>แก้ไขและส่งใหม่</a>` : ""}
+        ${mine && ["returned", "pending", "approved"].includes(st) ? `<a class="btn sky" href="#/new/${r.id}"><span class="material-symbols-outlined">edit</span>แก้ไขและส่งใหม่</a>
+        <button class="btn ghost" id="cancel-doc" style="color:var(--bad)"><span class="material-symbols-outlined">block</span>ยกเลิกเอกสาร</button>` : ""}
         ${ctx.role === "accounting" && st === "approved" ? `<button class="btn ok" id="repl"><span class="material-symbols-outlined">payments</span>โอนชดเชยสาขานี้</button>` : ""}`,
     }) + `
     <div class="grid g-main">
@@ -45,15 +46,17 @@ export default async function view(root, ctx, { params }) {
 
         <div class="card flat">
           <div class="card-h" style="padding:1.25rem 1.5rem 0"><h3>รายการค่าใช้จ่าย (${r.items.length})</h3></div>
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>รายการ</th><th>หมวดหมู่</th><th class="c">จำนวน</th><th class="r">ราคา/หน่วย</th><th class="r">รวม</th><th class="c">หลักฐาน</th></tr></thead><tbody>
-          ${r.items.map((it, i) => `<tr><td>${i + 1}</td><td><b>${esc(it.desc)}</b></td><td><span class="cat-chip">${esc(it.category)}</span></td>
-            <td class="c num">${it.qty}</td><td class="r num">${money(it.unitPrice ?? it.amount)}</td><td class="r num"><b>${money(it.amount)}</b></td>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">หลักฐาน</th></tr></thead><tbody>
+          ${r.items.map((it, i) => `<tr><td>${i + 1}</td><td>${thDate(it.date || r.date)}</td>
+            <td><b>${esc(it.supplier || it.desc || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}% · ก่อนหัก ${money(it.wht.before)} · หัก ${money(it.wht.amount)}</span></div>` : ""}</td>
+            <td class="small">${esc(it.docType || "-")}</td><td><span class="cat-chip">${esc(it.category)}</span></td><td>${esc(it.requester || r.requesterName || "")}</td>
+            <td class="r num"><b>${money(it.amount)}</b></td>
             <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีรูป</span>` : receipts[i] ? `<img class="thumb" src="${receipts[i]}" data-zoom="${i}" alt="ใบเสร็จ">` : `<span class="small muted">กำลังโหลด…</span>`}</td></tr>`).join("")}
-          </tbody><tfoot><tr><td colspan="5" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
+          </tbody><tfoot><tr><td colspan="6" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
         </div>
 
         ${r.items.some((i) => i.hasReceipt) ? `<div class="card"><h3 style="margin-bottom:1rem">เอกสารแนบ</h3><div class="rcpt-grid">
-          ${r.items.map((it, i) => it.hasReceipt && receipts[i] ? `<div class="rcpt" data-zoom="${i}"><img src="${receipts[i]}" alt=""><div><b>${esc(it.desc)}</b><br><span class="muted">${baht(it.amount)}</span></div></div>` : "").join("")}
+          ${r.items.map((it, i) => it.hasReceipt && receipts[i] ? `<div class="rcpt" data-zoom="${i}"><img src="${receipts[i]}" alt=""><div><b>${esc(it.supplier || it.desc || "")}</b><br><span class="muted">${baht(it.amount)}</span></div></div>` : "").join("")}
         </div></div>` : ""}
       </div>
 
@@ -76,7 +79,7 @@ export default async function view(root, ctx, { params }) {
             <button class="btn ghost block" id="rj" style="color:var(--bad)"><span class="material-symbols-outlined">cancel</span>ปฏิเสธคำขอ</button>
           </div></div>` : ""}
 
-        ${r.comment && st !== "pending" ? `<div class="notice ${st === "approved" || st === "replenished" ? "info" : st === "rejected" ? "bad" : "warn"}"><span class="material-symbols-outlined">chat</span><div><b>ความเห็นผู้พิจารณา (${esc(r.decidedByName || "")})</b><br>${esc(r.comment)}</div></div>` : ""}
+        ${r.comment && st !== "pending" ? `<div class="notice ${st === "approved" || st === "replenished" ? "info" : (st === "rejected" || st === "cancelled") ? "bad" : "warn"}"><span class="material-symbols-outlined">chat</span><div><b>${st === "cancelled" ? "เหตุผลที่ยกเลิก" : `ความเห็นผู้พิจารณา (${esc(r.decidedByName || "")})`}</b><br>${esc(r.comment)}</div></div>` : ""}
 
         <div class="card">
           <h3 style="margin-bottom:1rem">ประวัติการดำเนินการ (Audit Trail)</h3>
@@ -92,6 +95,19 @@ export default async function view(root, ctx, { params }) {
   const wire = () => {
     $("#print").onclick = () => window.print();
     $$("[data-zoom]").forEach((el) => (el.onclick = () => zoom(receipts[+el.dataset.zoom])));
+    const cd = $("#cancel-doc");
+    if (cd) cd.onclick = () => {
+      const m = openModal(`<div class="modal-body"><h3 class="modal-title">ยกเลิกเอกสาร ${esc(req.docNo)}</h3>
+        <p class="muted small">เลขที่เอกสารจะยังคงอยู่ในระบบ (ไม่ถูกนำกลับมาใช้) และ${req.status === "returned" ? "" : "ยอดที่หักไว้จะถูกคืนเข้ายอดคงเหลือ"}</p>
+        <div class="field"><label for="cx-r">เหตุผลที่ยกเลิก *</label><textarea class="inp" id="cx-r" placeholder="เช่น บันทึกซ้ำ / ไม่ได้ใช้จ่ายจริง"></textarea></div>
+        <div class="row" style="justify-content:flex-end;gap:.5rem;margin-top:1rem"><button class="btn ghost" data-close>ไม่ยกเลิก</button><button class="btn warn" id="cx-go">ยืนยันยกเลิกเอกสาร</button></div></div>`);
+      m.el.querySelector("#cx-go").onclick = async () => {
+        const reason = m.el.querySelector("#cx-r").value.trim();
+        if (!reason) { m.el.querySelector("#cx-r").classList.add("err"); return toast("กรุณาระบุเหตุผลที่ยกเลิก", "warn"); }
+        try { await busy(() => cancelRequest(req.id, reason, ctx.profile)); m.close(); toast(`ยกเลิก ${esc(req.docNo)} แล้ว`, "info"); }
+        catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
+      };
+    };
     const rp = $("#repl");
     if (rp) rp.onclick = () => { const b = ctx.summary && ctx.summary[req.branchId]; if (b) openReplenishModal(ctx, b); else toast("ยังไม่พบข้อมูลสาขาใน Summary", "warn"); };
     const act = (action, label, danger) => async () => {

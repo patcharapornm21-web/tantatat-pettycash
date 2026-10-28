@@ -52,6 +52,7 @@ export const STATUS = {
   replenished:{ label: "โอนชดเชยแล้ว",     cls: "st-paid",     icon: "payments" },
   rejected:   { label: "ปฏิเสธ",           cls: "st-rejected", icon: "cancel" },
   returned:   { label: "ส่งกลับแก้ไข",      cls: "st-review",   icon: "undo" },
+  cancelled:  { label: "ยกเลิก",           cls: "st-rejected", icon: "block" },
 };
 export const statusChip = (s) => {
   const x = STATUS[s] || { label: s, cls: "", icon: "help" };
@@ -81,3 +82,10 @@ export const debounce = (fn, ms = 200) => {
 };
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+// ป้ายชื่อสาขาแบบ "001-ศรีราชา" (ไม่ซ้ำรหัสถ้าชื่อขึ้นต้นด้วยรหัสอยู่แล้ว)
+export const branchLabel = (b) => !b ? "" : String(b.name || "").startsWith(b.id) ? b.name : `${b.id}-${b.name}`;
+export const isOpen = (b) => b && b.open === true;
+export const shortDate = (iso) => { // 2026-10-01 -> 01/10/26
+  if (!iso) return "-"; const [y, m, d] = String(iso).slice(0, 10).split("-"); return `${d}/${m}/${y.slice(2)}`;
+};
