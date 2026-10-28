@@ -369,6 +369,7 @@ export async function getUserSignature(uid) {
   if (!uid) return "";
   try { const s = await getDoc(doc(db, "users", uid)); return s.exists() ? s.data().signature || "" : ""; } catch { return ""; }
 }
+export const deleteUserProfile = (uid) => deleteDoc(doc(db, "users", uid));
 export const saveProfile = (uid, data) => setDoc(doc(db, "users", uid), data, { merge: true });
 export const bootstrapAvailable = async () => !(await getDoc(doc(db, "meta", "bootstrap"))).exists();
 export async function bootstrapAdmin(uid, email, name) {
