@@ -113,13 +113,15 @@ export default async function view(root, ctx) {
       const reqNames = names(rows, (x) => [x.it.requester || x.r.requesterName]);
       const romNames = [...new Set(hist("approver", ["approved"]))].join(", ");
       const accNames = [...new Set([...hist("accounting", ["approved", "replenished"])])].join(", ");
+      const sigOf = (pick) => { const x = rows.find((y) => pick(y.r)); return x ? pick(x.r) : ""; };
+      const sigs = [sigOf((q) => q.requesterSig), sigOf((q) => q.approverSig), ctx.role === "accounting" ? (ctx.profile.signature || "") : ""];
       return `<section class="pg"><div class="hd"><div class="t1">บริษัท ทันตะทัตถ์ คลินิก จำกัด (TANTATAT CLINIC COMPANY LIMITED)</div>
         <div class="t2">ใบสรุปเงินสดย่อย · Petty Cash Summary Report</div><div class="t3">ประจำเดือน ${esc(monthLabel)} · สาขา: ${esc(branchLabel({ id: g.id, name: g.name }))}</div></div>
         <div class="meta"><span><b>สาขา:</b> ${esc(branchLabel({ id: g.id, name: g.name }))}</span><span><b>วันที่พิมพ์:</b> ${pr}</span><span><b>ผู้พิมพ์:</b> ${esc(ctx.profile.name)}</span></div>
         <table><thead><tr><th>ลำดับ</th><th>วันที่</th><th>ผู้ขอเบิก</th><th>Supplier / รายการ</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th class="r">จำนวนเงิน (฿)</th><th>เลขที่ PC</th><th>หมายเหตุ</th></tr></thead><tbody>
         ${rows.map((x, i) => `<tr><td class="c">${i + 1}</td><td class="c">${shortDate(x.it.date || x.r.date)}</td><td>${esc(x.it.requester || x.r.requesterName)}</td><td>${esc(x.it.supplier || x.it.desc || "-")}</td><td>${esc(x.it.docType || "-")}</td><td>${esc(x.it.category)}</td><td class="r"><b>${money(x.it.amount)}</b></td><td class="c">${esc(x.r.docNo)}</td><td>${esc(x.it.note || "")}${x.it.wht ? ` (WHT ${x.it.wht.rate}%)` : ""}</td></tr>`).join("")}</tbody></table>
         <div class="tot"><span>รวมค่าใช้จ่ายทั้งหมด ${rows.length} รายการ</span><b>${money(sum)} บาท</b></div>
-        <div class="sig">${[["ผู้ขอเบิก", "Requester", reqNames], ["ผู้อนุมัติ (ROM)", "Approver", romNames], ["ผู้รับเอกสาร (บัญชี)", "Accounting", accNames]].map(([a, b, n]) => `<div><div class="ln"></div><div class="nm">${esc(n) || "&nbsp;"}</div><div class="rl">( ${a} / ${b} )</div><div class="dt">วันที่ __ / __ / ____</div></div>`).join("")}</div>
+        <div class="sig">${[["ผู้ขอเบิก", "Requester", reqNames], ["ผู้อนุมัติ (ROM)", "Approver", romNames], ["ผู้รับเอกสาร (บัญชี)", "Accounting", accNames]].map(([a, b, n], si) => `<div><div class="ln">${sigs[si] ? `<img src="${sigs[si]}" alt="">` : ""}</div><div class="nm">${esc(n) || "&nbsp;"}</div><div class="rl">( ${a} / ${b} )</div><div class="dt">วันที่ __ / __ / ____</div></div>`).join("")}</div>
         <div class="ft">ระบบเงินสดย่อยดิจิทัล | บริษัท ทันตะทัตถ์ คลินิก จำกัด</div></section>`;
     }).join("");
     const css = `<style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:'Prompt','Noto Sans Thai',sans-serif;color:#111;font-size:11px;margin:0}
@@ -129,7 +131,7 @@ export default async function view(root, ctx) {
       table{width:100%;border-collapse:collapse}th{background:#555;color:#fff;padding:2mm;font-size:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact;border:.5pt solid #999}
       td{padding:1.6mm 2mm;border:.5pt solid #bbb;vertical-align:top}tbody tr:nth-child(even){background:#f4f4f4;-webkit-print-color-adjust:exact;print-color-adjust:exact}
       .r{text-align:right}.c{text-align:center}.tot{display:flex;justify-content:space-between;background:#2b2b2b;color:#fff;padding:3mm 5mm;margin-top:2mm;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .sig{display:flex;gap:10mm;margin-top:14mm;break-inside:avoid}.sig>div{flex:1;text-align:center}.ln{border-bottom:.75pt solid #333;height:14mm}
+      .sig{display:flex;gap:10mm;margin-top:14mm;break-inside:avoid}.sig>div{flex:1;text-align:center}.ln{border-bottom:.75pt solid #333;height:14mm;display:flex;align-items:flex-end;justify-content:center}.ln img{max-height:13mm;max-width:90%}
       .nm{font-size:10px;margin-top:1mm;min-height:4mm}.rl{font-weight:700;font-size:10px;margin-top:1mm}.dt{font-size:9px;color:#555;margin-top:1mm}.ft{margin-top:6mm;font-size:8px;color:#999;border-top:1px solid #ddd;padding-top:2mm}</style>`;
     const fonts = `<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@400;600;700&display=swap" rel="stylesheet">`;
     const ifr = document.createElement("iframe"); ifr.style.cssText = "position:fixed;top:-9999px;width:1px;height:1px;border:0";

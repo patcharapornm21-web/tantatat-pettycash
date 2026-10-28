@@ -213,6 +213,7 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
       requesterUid: profile.uid, requesterName: profile.name,
       items, total, status: "pending", history, comment: "",
       createdAt: editReq ? editReq.createdAt : serverTimestamp(), updatedAt: now,
+      requesterSig: profile.signature || "",
       ...(editReq ? { editCount: (cur.editCount || 0) + 1, lastEditReason: form.editReason.trim() } : {}),
     };
     tx.set(requestRef(id), base);
@@ -266,6 +267,7 @@ export async function decideRequest(reqId, action, comment, profile) {
     tx.update(requestRef(reqId), {
       status: action, history, comment: comment || "", decidedBy: profile.uid, decidedByName: profile.name,
       decidedAt: Date.now(), updatedAt: Date.now(),
+      ...(action === "approved" ? { approverSig: profile.signature || "", approverName: profile.name } : {}),
     });
     const dBal = action === "approved" ? 0 : r.total; // อนุมัติ: ยอดหักไปแล้วตอนเบิก / ปฏิเสธ-ตีกลับ: คืนยอด
     const bp = { pendingAmt: increment(-r.total), pendingCnt: increment(-1) };
@@ -359,6 +361,7 @@ export const getProfile = async (uid) => {
 };
 export const listUsers = async () =>
   (await getDocs(query(collection(db, "users"), limit(300)))).docs.map((d) => ({ uid: d.id, ...d.data() }));
+export const saveMySignature = (uid, signature) => setDoc(doc(db, "users", uid), { signature, signatureAt: Date.now() }, { merge: true });
 export const saveProfile = (uid, data) => setDoc(doc(db, "users", uid), data, { merge: true });
 export const bootstrapAvailable = async () => !(await getDoc(doc(db, "meta", "bootstrap"))).exists();
 export async function bootstrapAdmin(uid, email, name) {

@@ -4,6 +4,7 @@ import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from
 import { zoom } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
 import { bus } from "../app.js";
+import { ensureSignature } from "../signature.js";
 
 const ACTION_LABEL = { submit: "ส่งใบเบิก", resubmit: "แก้ไขและส่งใหม่", approved: "อนุมัติ", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข", replenished: "โอนชดเชย", edited: "แก้ไขและส่งอนุมัติใหม่", cancelled: "ยกเลิกเอกสาร" };
 
@@ -54,6 +55,11 @@ export default async function view(root, ctx, { params }) {
             <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีรูป</span>` : receipts[i] ? `<img class="thumb" src="${receipts[i]}" data-zoom="${i}" alt="ใบเสร็จ">` : `<span class="small muted">กำลังโหลด…</span>`}</td></tr>`).join("")}
           </tbody><tfoot><tr><td colspan="6" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
         </div>
+
+        ${r.requesterSig || r.approverSig ? `<div class="card"><h3 style="margin-bottom:1rem">ลายเซ็น</h3><div class="row wrap" style="gap:2rem;align-items:flex-end">
+          ${r.requesterSig ? `<div class="c"><img src="${r.requesterSig}" alt="ลายเซ็นผู้ขอ" style="max-height:70px;max-width:220px"><div class="small muted" style="border-top:1px solid #94a3b8;padding-top:.25rem">ผู้ขอเบิก: ${esc(r.requesterName)}</div></div>` : ""}
+          ${r.approverSig ? `<div class="c"><img src="${r.approverSig}" alt="ลายเซ็นผู้อนุมัติ" style="max-height:70px;max-width:220px"><div class="small muted" style="border-top:1px solid #94a3b8;padding-top:.25rem">ผู้อนุมัติ: ${esc(r.approverName || r.decidedByName || "")}</div></div>` : ""}
+        </div></div>` : ""}
 
         ${r.items.some((i) => i.hasReceipt) ? `<div class="card"><h3 style="margin-bottom:1rem">เอกสารแนบ</h3><div class="rcpt-grid">
           ${r.items.map((it, i) => it.hasReceipt && receipts[i] ? `<div class="rcpt" data-zoom="${i}"><img src="${receipts[i]}" alt=""><div><b>${esc(it.supplier || it.desc || "")}</b><br><span class="muted">${baht(it.amount)}</span></div></div>` : "").join("")}
@@ -113,6 +119,7 @@ export default async function view(root, ctx, { params }) {
     const act = (action, label, danger) => async () => {
       const comment = $("#cmt").value.trim();
       if (action !== "approved" && !comment) { $("#cmt").classList.add("err"); $("#cmt").focus(); return toast("กรุณาระบุเหตุผล", "warn"); }
+      if (action === "approved" && !(await ensureSignature(ctx))) return toast("ต้องมีลายเซ็นก่อนอนุมัติ", "warn");
       if (!(await confirmDialog(`${label} ${req.docNo} ยอด ${baht(req.total)}?`, { okText: label, danger }))) return;
       try {
         await busy(() => decideRequest(req.id, action, comment, ctx.profile));

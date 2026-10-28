@@ -188,6 +188,7 @@ function buildShell() {
         <div class="userbox"><div class="avatar">${esc(initials)}</div>
           <div class="u grow" style="min-width:0"><b style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name || p.email)}</b>
             <span class="small muted">${ROLE_LABEL[p.role]}${p.role === "branch" ? " · " + esc(p.branchId) : ""}</span></div></div>
+        <button class="btn ghost sm" id="mysig"><span class="material-symbols-outlined">draw</span><span class="hide-sm">ลายเซ็นของฉัน</span></button>
         <button class="btn ghost sm" id="logout"><span class="material-symbols-outlined">logout</span><span class="hide-sm">ออกจากระบบ</span></button>
       </div>
     </aside>
@@ -195,12 +196,14 @@ function buildShell() {
       <div class="row" style="gap:.5rem;min-width:0"><div class="avatar" style="background:var(--primary-soft)"><span class="material-symbols-outlined" style="font-size:20px">dentistry</span></div>
         <div style="min-width:0"><div class="tiny" style="color:var(--primary-d);font-weight:700;letter-spacing:.06em">${esc(APP_SETTINGS.orgName.toUpperCase())}</div>
         <b id="mtitle" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62vw">${esc(p.name || "")}</b></div></div>
-      <span class="live" id="mlive"><i></i>Live</span>
+      <span class="row" style="gap:.5rem"><button class="icon-btn" id="mysig2" aria-label="ลายเซ็นของฉัน"><span class="material-symbols-outlined">draw</span></button><span class="live" id="mlive"><i></i>Live</span></span>
     </header>
     <main class="main"><div class="page" id="view"></div></main>
     <nav class="dock">${dockHtml}</nav>
   </div>`;
   $("#logout").onclick = () => signOut(auth);
+  const openSig = () => import("./signature.js").then((m) => m.openSignaturePad(ctx));
+  $("#mysig").onclick = openSig; $("#mysig2").onclick = openSig;
   const ml = $("#mlogout"); if (ml) ml.onclick = () => signOut(auth);
   renderBadges();
 }
