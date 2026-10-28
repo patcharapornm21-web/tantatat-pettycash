@@ -1,7 +1,7 @@
 // Central Accounting Console — ภาพรวม 100 สาขาจาก Summary Document (อ่านแค่ 1 เอกสาร) + Real-time
 import { esc, baht, money, thDate, statusChip, debounce, branchLabel, isOpen, $, $$, round2 } from "../utils.js";
 import { pageHeader, toast, openModal, busy, friendlyError, isSoundOn, setSound, beep, confirmDialog } from "../ui.js";
-import { seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
+import { resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
 import { openReplenishModal } from "./replenish.js";
 import { APP_SETTINGS } from "../firebase-config.js";
 import { bus } from "../app.js";
@@ -19,6 +19,7 @@ export default async function view(root, ctx) {
     title: "Central Accounting Console",
     crumb: "บัญชีส่วนกลาง › ภาพรวมทุกสาขา",
     actions: `<button class="btn ghost" id="snd"><span class="material-symbols-outlined">${isSoundOn() ? "volume_up" : "volume_off"}</span><span id="sndt">${isSoundOn() ? "เสียง: เปิด" : "เสียง: ปิด"}</span></button>
+      <button class="btn ghost" id="rst" style="color:var(--bad)"><span class="material-symbols-outlined">delete_sweep</span>ล้างข้อมูลทดสอบ</button>
       <button class="btn ghost" id="cfg"><span class="material-symbols-outlined">tune</span>ตั้งค่าระบบ</button>
       <button class="btn ghost" id="opn"><span class="material-symbols-outlined">toggle_on</span>เปิด/ปิดสาขา</button>
       <button class="btn ghost" id="bulk"><span class="material-symbols-outlined">edit_note</span>แก้ชื่อ/วงเงิน หลายสาขา</button>
@@ -205,7 +206,28 @@ export default async function view(root, ctx) {
     };
   }
 
+  function openReset() {
+    const all = Object.values(ctx.summary || {}).filter((b) => b && b.id).sort((x, y) => (x.id > y.id ? 1 : -1));
+    const m = openModal(`<div class="modal-body"><h3 class="modal-title">ล้างข้อมูลทดสอบ</h3>
+      <div class="notice bad"><span class="material-symbols-outlined">warning</span><div>จะ<b>ลบถาวร</b>ใบเบิก รูปใบเสร็จ และประวัติโอนชดเชยของสาขาที่เลือก แล้ว<b>รีเซ็ตยอดคงเหลือ = วงเงิน</b> และเริ่มรันเลขที่เอกสารใหม่ที่ -001 (ผู้ใช้/วงเงิน/ชื่อสาขาไม่ถูกลบ) — ควรกด Export รายงานเก็บไว้ก่อนถ้าต้องการ</div></div>
+      <div class="field"><label for="x-sc">ขอบเขต</label><select class="inp" id="x-sc"><option value="open">ทุกสาขาที่เปิดใช้งาน (${all.filter(isOpen).length})</option><option value="all">ทุกสาขา (${all.length})</option>${all.map((b) => `<option value="${esc(b.id)}">${esc(branchLabel(b))}</option>`).join("")}</select></div>
+      <div class="field"><label for="x-cf">พิมพ์คำว่า “ลบ” เพื่อยืนยัน</label><input class="inp" id="x-cf" autocomplete="off"></div>
+      <div class="small muted" id="x-pg"></div></div>
+      <div class="modal-foot"><button class="btn ghost" data-close>ยกเลิก</button><button class="btn warn" id="x-go"><span class="material-symbols-outlined">delete_forever</span>ล้างข้อมูล</button></div>`);
+    const q2 = (s) => m.el.querySelector(s);
+    q2("#x-go").onclick = async () => {
+      if (q2("#x-cf").value.trim() !== "ลบ") { q2("#x-cf").classList.add("err"); return toast("พิมพ์คำว่า “ลบ” เพื่อยืนยัน", "warn"); }
+      const sc = q2("#x-sc").value; const ids = sc === "open" ? all.filter(isOpen).map((b) => b.id) : sc === "all" ? all.map((b) => b.id) : [sc];
+      let n = 0;
+      try {
+        const r = await busy(() => resetBranchData(ids, () => { n++; q2("#x-pg").textContent = `กำลังล้าง ${n}/${ids.length} สาขา…`; }), "กำลังล้างข้อมูล…");
+        toast(`ล้างแล้ว ${ids.length} สาขา · ใบเบิก ${r.requests} · รูป ${r.receipts} · ประวัติโอน ${r.replenishments} — เลขเอกสารเริ่มใหม่`, "ok", 8000); m.close();
+      } catch (e) { console.error(e); toast(friendlyError(e), "err", 8000); }
+    };
+  }
+
   // ---------- Wire ----------
+  $("#rst").onclick = openReset;
   $("#seed").onclick = openSeed; $("#bulk").onclick = openBulk; $("#opn").onclick = openOpenClose; $("#cfg").onclick = openSettings;
   $("#snd").onclick = () => { setSound(!isSoundOn()); $("#sndt").textContent = isSoundOn() ? "เสียง: เปิด" : "เสียง: ปิด"; $("#snd .material-symbols-outlined").textContent = isSoundOn() ? "volume_up" : "volume_off"; if (isSoundOn()) beep(); };
   $("#q").oninput = debounce((e) => { if (!alive) return; st.q = e.target.value; st.page = 0; drawTable(); }, 150);

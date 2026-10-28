@@ -1,4 +1,4 @@
-import { esc, baht, round2, branchLabel, $ } from "../utils.js";
+import { esc, baht, round2, branchLabel, todayISO, $ } from "../utils.js";
 import { openModal, toast, busy, friendlyError } from "../ui.js";
 import { replenish, getApprovedUnpaid } from "../data.js";
 
@@ -19,6 +19,7 @@ export async function openReplenishModal(ctx, b) {
       <div class="notice info"><span class="material-symbols-outlined">info</span><div>ใบเบิกที่อนุมัติแล้วรอชดเชย <b>${unpaid.length}</b> ใบ รวม <b>${baht(approvedSum)}</b> (ยอดรวมที่ควรโอน) — จะถูกปิดเป็น “โอนชดเชยแล้ว”<br>
         <span class="small">ยอดใช้ไป (วงเงิน − คงเหลือ) = ${baht(used)} (รวมใบที่ยังรออนุมัติ)</span></div></div>
       <div class="field"><label for="r-amt">จำนวนเงินที่โอน (บาท) * <span class="small muted">— แนะนำ = ยอดอนุมัติรวม</span></label><input class="inp num" id="r-amt" type="number" min="0.01" step="0.01" value="${(approvedSum > 0 ? approvedSum : used).toFixed(2)}"></div>
+      <div class="field"><label for="r-date">วันที่โอนเงินให้สาขา *</label><input class="inp" id="r-date" type="date" value="${todayISO()}" max="${todayISO()}"></div>
       <div class="field"><label for="r-note">อ้างอิง / หมายเหตุ (เช่น เลขที่รายการโอน)</label><input class="inp" id="r-note" maxlength="120"></div>
       <div class="small muted" id="r-after"></div>
     </div>
@@ -29,8 +30,9 @@ export async function openReplenishModal(ctx, b) {
   q("#r-go").onclick = async () => {
     const amt = +q("#r-amt").value;
     if (!(amt > 0)) return toast("กรอกจำนวนเงินให้ถูกต้อง", "warn");
+    if (!q("#r-date").value) { q("#r-date").classList.add("err"); return toast("กรุณาระบุวันที่โอนเงิน", "warn"); }
     try {
-      const r = await busy(() => replenish(b.id, amt, q("#r-note").value.trim(), ctx.profile), "กำลังบันทึกการโอน…");
+      const r = await busy(() => replenish(b.id, amt, q("#r-note").value.trim(), ctx.profile, q("#r-date").value), "กำลังบันทึกการโอน…");
       toast(`โอนชดเชย ${esc(b.name)} ${baht(amt)} เรียบร้อย (ปิด ${r.count} ใบเบิก)`, "ok", 6000);
       m.close();
     } catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }

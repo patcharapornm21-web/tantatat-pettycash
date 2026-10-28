@@ -1,3 +1,4 @@
+import { getUserSignature } from "../data.js";
 import { esc, baht, money, round2, branchLabel, isOpen, shortDate, thDate, thMonth, lastMonths, curMonth, statusChip, STATUS, toCSV, downloadFile, $, $$ } from "../utils.js";
 import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
 import { fetchReportRequests, purgeRequests } from "../data.js";
@@ -100,8 +101,15 @@ export default async function view(root, ctx) {
   ["f-cat", "f-st"].forEach((id) => ($("#" + id).onchange = () => { if (!st.data) return; st.category = $("#f-cat").value; st.status = $("#f-st").value; paint(); }));
 
   // ---------- พิมพ์ใบสรุปเงินสดย่อย (ต่อ 1 สาขา = 1 หน้า) ----------
-  const printReport = () => {
+  const printReport = async () => {
     const L = lines(); const groups = {};
+    // ดึงลายเซ็นที่บันทึกไว้ของผู้ขอ/ผู้อนุมัติ (ใบที่ไม่มีสแนปช็อต) — บัญชีอ่านได้ทุกคน, คนอื่นอ่านได้เฉพาะของตัวเอง
+    const live = { [ctx.profile.uid]: ctx.profile.signature || "" };
+    const need = new Set(); L.forEach(({ r }) => { if (!r.requesterSig && r.requesterUid) need.add(r.requesterUid); if (!r.approverSig && r.decidedBy && ["approved", "replenished"].includes(r.status)) need.add(r.decidedBy); });
+    await Promise.all([...need].filter((u) => !(u in live) && ctx.role === "accounting").map(async (u) => { live[u] = await getUserSignature(u); }));
+    const reqSig = (r) => r.requesterSig || live[r.requesterUid] || "";
+    const apprSig = (r) => r.approverSig || (["approved", "replenished"].includes(r.status) ? live[r.decidedBy] || "" : "");
+    const dmy = (t) => { const x = new Date(t); return x.toLocaleDateString("en-GB").replace(/\/\d{4}$/, (y) => "/" + (+y.slice(1) + 543)); };
     L.forEach((x) => (groups[x.r.branchId] ||= { name: x.r.branchName, id: x.r.branchId, rows: [] }).rows.push(x));
     const monthLabel = st.from === st.to ? thMonth(st.from) : `${thMonth(st.from)} – ${thMonth(st.to)}`;
     const now = new Date(); const pr = `${shortDate(now.toISOString())} ${String(now.getHours()).padStart(2, "0")}.${String(now.getMinutes()).padStart(2, "0")} น.`;
@@ -114,14 +122,16 @@ export default async function view(root, ctx) {
       const romNames = [...new Set(hist("approver", ["approved"]))].join(", ");
       const accNames = [...new Set([...hist("accounting", ["approved", "replenished"])])].join(", ");
       const sigOf = (pick) => { const x = rows.find((y) => pick(y.r)); return x ? pick(x.r) : ""; };
-      const sigs = [sigOf((q) => q.requesterSig), sigOf((q) => q.approverSig), ctx.role === "accounting" ? (ctx.profile.signature || "") : ""];
+      const sigs = [sigOf(reqSig), sigOf(apprSig), ctx.role === "accounting" ? (ctx.profile.signature || "") : ""];
+      const rq = rows.find((y) => reqSig(y.r)); const ap = rows.find((y) => apprSig(y.r));
+      const dates = [rq ? dmy((rq.r.history || []).find((h) => h.action === "submit" || h.action === "resubmit")?.at || rq.r.updatedAt) : "", ap ? dmy(ap.r.decidedAt || ap.r.updatedAt) : "", sigs[2] ? dmy(Date.now()) : ""];
       return `<section class="pg"><div class="hd"><div class="t1">บริษัท ทันตะทัตถ์ คลินิก จำกัด (TANTATAT CLINIC COMPANY LIMITED)</div>
         <div class="t2">ใบสรุปเงินสดย่อย · Petty Cash Summary Report</div><div class="t3">ประจำเดือน ${esc(monthLabel)} · สาขา: ${esc(branchLabel({ id: g.id, name: g.name }))}</div></div>
         <div class="meta"><span><b>สาขา:</b> ${esc(branchLabel({ id: g.id, name: g.name }))}</span><span><b>วันที่พิมพ์:</b> ${pr}</span><span><b>ผู้พิมพ์:</b> ${esc(ctx.profile.name)}</span></div>
         <table><thead><tr><th>ลำดับ</th><th>วันที่</th><th>ผู้ขอเบิก</th><th>Supplier / รายการ</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th class="r">จำนวนเงิน (฿)</th><th>เลขที่ PC</th><th>หมายเหตุ</th></tr></thead><tbody>
         ${rows.map((x, i) => `<tr><td class="c">${i + 1}</td><td class="c">${shortDate(x.it.date || x.r.date)}</td><td>${esc(x.it.requester || x.r.requesterName)}</td><td>${esc(x.it.supplier || x.it.desc || "-")}</td><td>${esc(x.it.docType || "-")}</td><td>${esc(x.it.category)}</td><td class="r"><b>${money(x.it.amount)}</b></td><td class="c">${esc(x.r.docNo)}</td><td>${esc(x.it.note || "")}${x.it.wht ? ` (WHT ${x.it.wht.rate}%)` : ""}</td></tr>`).join("")}</tbody></table>
         <div class="tot"><span>รวมค่าใช้จ่ายทั้งหมด ${rows.length} รายการ</span><b>${money(sum)} บาท</b></div>
-        <div class="sig">${[["ผู้ขอเบิก", "Requester", reqNames], ["ผู้อนุมัติ (ROM)", "Approver", romNames], ["ผู้รับเอกสาร (บัญชี)", "Accounting", accNames]].map(([a, b, n], si) => `<div><div class="ln">${sigs[si] ? `<img src="${sigs[si]}" alt="">` : ""}</div><div class="nm">${esc(n) || "&nbsp;"}</div><div class="rl">( ${a} / ${b} )</div><div class="dt">วันที่ __ / __ / ____</div></div>`).join("")}</div>
+        <div class="sig">${[["ผู้ขอเบิก", "Requester", reqNames], ["ผู้อนุมัติ (ROM)", "Approver", romNames], ["ผู้รับเอกสาร (บัญชี)", "Accounting", accNames]].map(([a, b, n], si) => `<div><div class="ln">${sigs[si] ? `<img src="${sigs[si]}" alt="">` : ""}</div><div class="nm">${esc(n) || "&nbsp;"}</div><div class="rl">( ${a} / ${b} )</div><div class="dt">วันที่ ${dates[si] || "__ / __ / ____"}</div></div>`).join("")}</div>
         <div class="ft">ระบบเงินสดย่อยดิจิทัล | บริษัท ทันตะทัตถ์ คลินิก จำกัด</div></section>`;
     }).join("");
     const css = `<style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{font-family:'Prompt','Noto Sans Thai',sans-serif;color:#111;font-size:11px;margin:0}

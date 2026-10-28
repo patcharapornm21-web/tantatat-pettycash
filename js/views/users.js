@@ -1,5 +1,5 @@
-import { esc, ROLE_LABEL, $, $$, debounce } from "../utils.js";
-import { pageHeader, toast, openModal, busy, friendlyError } from "../ui.js";
+import { esc, ROLE_LABEL, $, $$, debounce, toCSV, downloadFile } from "../utils.js";
+import { pageHeader, toast, openModal, busy, friendlyError, confirmDialog } from "../ui.js";
 import { listUsers, saveProfile, assignBranchRegions } from "../data.js";
 import { branchLabel, isOpen } from "../utils.js";
 import { secondaryAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, signOut, auth } from "../fb.js";
@@ -7,7 +7,7 @@ import { secondaryAuth, createUserWithEmailAndPassword, sendPasswordResetEmail, 
 export default async function view(root, ctx) {
   let users = [], q = "";
   root.innerHTML = pageHeader({ title: "ผู้ใช้งาน", crumb: "บัญชีส่วนกลาง › จัดการผู้ใช้ & สิทธิ์", live: false,
-    actions: `<button class="btn sky" id="add"><span class="material-symbols-outlined">person_add</span>เพิ่มผู้ใช้</button>` }) + `
+    actions: `<button class="btn ghost" id="imp"><span class="material-symbols-outlined">upload_file</span>นำเข้าผู้ใช้สาขา (CSV)</button> <button class="btn sky" id="add"><span class="material-symbols-outlined">person_add</span>เพิ่มผู้ใช้</button>` }) + `
   <div class="card flat"><div class="filters" style="padding:1.25rem 1.5rem"><div class="field grow"><label>ค้นหา</label><div class="search"><span class="material-symbols-outlined">search</span><input class="inp" id="q" placeholder="ชื่อ / อีเมล / สาขา"></div></div>
     <button class="btn ghost" id="rf"><span class="material-symbols-outlined">refresh</span>โหลดใหม่</button></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>ชื่อ</th><th>อีเมล</th><th>สิทธิ์</th><th>สาขา / ขอบเขต</th><th>สถานะ</th><th class="r">จัดการ</th></tr></thead><tbody id="tb"></tbody></table></div></div>`;
@@ -78,8 +78,12 @@ export default async function view(root, ctx) {
             data.createdAt = Date.now();
           }
           if (data.role === "approver" && !data.region) data.region = "ROM_" + uid.slice(0, 6).toUpperCase();
+          if (data.role === "approver") data.branchIds = [...sel].sort(); else data.branchIds = null;
           await saveProfile(uid, data);
           if (data.role === "approver") {
+            // สาขาที่ถูกย้ายมาจาก ROM คนอื่น → ตัดออกจากรายการของคนนั้น
+            for (const id of sel) { const old = allB.find((b) => b.id === id)?.region; const h = old && old !== data.region ? holders[old] : null;
+              if (h && Array.isArray(h.branchIds)) { h.branchIds = h.branchIds.filter((x) => x !== id); await saveProfile(h.uid, { branchIds: h.branchIds }); } }
             const changes = [...sel].filter((id) => !owned.has(id)).map((id) => ({ id, region: data.region }))
               .concat([...owned].filter((id) => !sel.has(id)).map((id) => ({ id, region: "-" })));
             if (changes.length) await assignBranchRegions(changes);
@@ -89,6 +93,44 @@ export default async function view(root, ctx) {
       } catch (e) { console.error(e); q("#u-e").textContent = friendlyError(e); }
     };
   }
+  // ---------- นำเข้าผู้ใช้สาขาจาก CSV / วางข้อความ (ROM ต้องเพิ่มเองเพื่อเลือกสาขา) ----------
+  function importForm() {
+    const m = openModal(`<div class="modal-body"><div class="row between"><h3 class="modal-title">นำเข้าผู้ใช้สาขา</h3><button class="icon-btn" data-close aria-label="ปิด"><span class="material-symbols-outlined">close</span></button></div>
+      <p class="small muted" style="margin:0 0 .5rem">1 บรรทัด = 1 ผู้ใช้ รูปแบบ: <b>รหัสสาขา, อีเมล, รหัสผ่านเริ่มต้น, ชื่อ(ไม่ใส่ก็ได้)</b> — สร้างเป็นสิทธิ์ “พนักงานสาขา” เท่านั้น ส่วน ROM ให้กดเพิ่มผู้ใช้แล้วติ๊กเลือกสาขาเอง</p>
+      <div class="row" style="gap:.5rem;flex-wrap:wrap;margin-bottom:.5rem"><button class="btn ghost sm" id="im-tpl"><span class="material-symbols-outlined">download</span>ดาวน์โหลดไฟล์ตัวอย่าง</button>
+        <label class="btn ghost sm" style="cursor:pointer"><span class="material-symbols-outlined">attach_file</span>เลือกไฟล์ .csv<input type="file" id="im-file" accept=".csv,.txt,text/csv" hidden></label></div>
+      <textarea class="inp" id="im-txt" rows="7" placeholder="001,sriracha@clinic.com,Pass1234,พนักงานศรีราชา&#10;002,bangsaen@clinic.com,Pass1234"></textarea>
+      <div id="im-res" class="small" style="margin-top:.75rem;max-height:220px;overflow:auto"></div></div>
+      <div class="modal-foot"><button class="btn ghost" data-close>ปิด</button><button class="btn sky" id="im-go"><span class="material-symbols-outlined">group_add</span>ตรวจสอบและสร้างผู้ใช้</button></div>`, { wide: true });
+    const q2 = (s) => m.el.querySelector(s);
+    q2("#im-tpl").onclick = () => downloadFile("users-template.csv", toCSV([["รหัสสาขา", "อีเมล", "รหัสผ่านเริ่มต้น", "ชื่อ"], ["001", "sriracha@example.com", "Pass1234", "พนักงานศรีราชา"], ["002", "bangsaen@example.com", "Pass1234", ""]]));
+    q2("#im-file").onchange = async (e) => { const f = e.target.files[0]; if (f) q2("#im-txt").value = await f.text(); };
+    const parse = () => q2("#im-txt").value.replace(/^\uFEFF/, "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      .map((l) => l.split(/[,\t;]/).map((c) => c.trim().replace(/^"|"$/g, "")))
+      .filter((c) => !/^(รหัสสาขา|branch)/i.test(c[0]));
+    q2("#im-go").onclick = async () => {
+      const rows = parse(); const res = q2("#im-res");
+      if (!rows.length) return toast("ยังไม่มีข้อมูลให้นำเข้า", "warn");
+      const seen = new Set(users.map((x) => (x.email || "").toLowerCase()));
+      const jobs = rows.map((c) => { const [b, email, pw, nm] = c; const bid = String(b || "").padStart(3, "0"); const em = (email || "").toLowerCase();
+        const err = !/^\d{3}$/.test(bid) ? "รหัสสาขาต้องเป็นเลข" : !(ctx.summary && ctx.summary[bid]) ? `ไม่พบสาขา ${bid}` : !/^\S+@\S+\.\S+$/.test(em) ? "อีเมลไม่ถูกต้อง" : (pw || "").length < 6 ? "รหัสผ่านอย่างน้อย 6 ตัว" : seen.has(em) ? "อีเมลนี้มีในรายการ/ระบบแล้ว" : "";
+        if (!err) seen.add(em); return { bid, em, pw, name: nm || `พนักงาน ${ctx.summary?.[bid]?.name || bid}`, err }; });
+      const bad = jobs.filter((j) => j.err);
+      if (bad.length && !(await confirmDialog(`มี ${bad.length} บรรทัดที่ไม่ผ่านการตรวจสอบ (จะข้ามบรรทัดเหล่านั้น) ดำเนินการต่อกับอีก ${jobs.length - bad.length} บรรทัด?`))) { res.innerHTML = bad.map((j) => `<div style="color:var(--bad)">✗ ${esc(j.em || "-")} (${esc(j.bid)}) — ${esc(j.err)}</div>`).join(""); return; }
+      q2("#im-go").disabled = true; let okN = 0; const lines = [];
+      for (const j of jobs) {
+        if (j.err) { lines.push(`<div style="color:var(--bad)">✗ ${esc(j.em)} — ${esc(j.err)}</div>`); continue; }
+        try {
+          const sa = secondaryAuth(); const cred = await createUserWithEmailAndPassword(sa, j.em, j.pw); await signOut(sa);
+          await saveProfile(cred.user.uid, { name: j.name, email: j.em, role: "branch", branchId: j.bid, region: null, active: true, createdAt: Date.now() });
+          okN++; lines.push(`<div style="color:var(--ok,#059669)">✓ ${esc(j.em)} → สาขา ${esc(j.bid)}</div>`);
+        } catch (e) { lines.push(`<div style="color:var(--bad)">✗ ${esc(j.em)} — ${esc(friendlyError(e))}</div>`); }
+        res.innerHTML = lines.join("");
+      }
+      res.innerHTML = `<b>สร้างสำเร็จ ${okN}/${jobs.length} ราย</b>` + lines.join(""); q2("#im-go").disabled = false; load();
+    };
+  }
+  $("#imp").onclick = importForm;
   $("#add").onclick = () => form(null); $("#rf").onclick = load;
   $("#q").oninput = debounce((e) => { if (!$("#tb")) return; q = e.target.value; paint(); }, 150);
   load();

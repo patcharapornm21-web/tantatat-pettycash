@@ -286,22 +286,25 @@ export async function getApprovedUnpaid(branchId) {
   return s.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-export async function replenish(branchId, amount, note, profile) {
+export async function replenish(branchId, amount, note, profile, transferDate = "") {
   amount = round2(amount);
   if (!(amount > 0)) throw new Error("จำนวนเงินต้องมากกว่า 0");
   const unpaid = await getApprovedUnpaid(branchId);
   const replRef = doc(collection(db, "replenishments"));
+  if (!transferDate) throw new Error("กรุณาระบุวันที่โอนเงิน");
   const now = Date.now();
+  const tAt = new Date(transferDate + "T12:00:00").getTime();
+  const tTxt = transferDate.split("-").reverse().join("/");
   const batch = writeBatch(db);
   batch.set(replRef, {
-    branchId, amount, note: note || "", by: profile.name, byUid: profile.uid, at: now,
+    branchId, amount, note: note || "", by: profile.name, byUid: profile.uid, at: now, transferDate, transferAt: tAt,
     month: new Date(now).toISOString().slice(0, 7), requestIds: unpaid.map((u) => u.id),
   });
   batch.update(branchRef(branchId), { balance: increment(amount) });
-  batch.update(summaryRef(), { [`${branchId}.balance`]: increment(amount), [`${branchId}.lastReplenishAt`]: now });
+  batch.update(summaryRef(), { [`${branchId}.balance`]: increment(amount), [`${branchId}.lastReplenishAt`]: tAt });
   unpaid.forEach((u) => batch.update(requestRef(u.id), {
-    status: "replenished", replenishId: replRef.id, replenishedAt: now, updatedAt: now,
-    history: arrayUnion({ action: "replenished", by: profile.name, role: "accounting", at: now, comment: `โอนชดเชย ${amount.toFixed(2)} บาท` }),
+    status: "replenished", replenishId: replRef.id, replenishedAt: tAt, transferDate, updatedAt: now,
+    history: arrayUnion({ action: "replenished", by: profile.name, role: "accounting", at: now, comment: `โอนชดเชย ${amount.toFixed(2)} บาท · วันที่โอน ${tTxt}` }),
   }));
   await batch.commit();
   return { count: unpaid.length };
@@ -362,6 +365,10 @@ export const getProfile = async (uid) => {
 export const listUsers = async () =>
   (await getDocs(query(collection(db, "users"), limit(300)))).docs.map((d) => ({ uid: d.id, ...d.data() }));
 export const saveMySignature = (uid, signature) => setDoc(doc(db, "users", uid), { signature, signatureAt: Date.now() }, { merge: true });
+export async function getUserSignature(uid) {
+  if (!uid) return "";
+  try { const s = await getDoc(doc(db, "users", uid)); return s.exists() ? s.data().signature || "" : ""; } catch { return ""; }
+}
 export const saveProfile = (uid, data) => setDoc(doc(db, "users", uid), data, { merge: true });
 export const bootstrapAvailable = async () => !(await getDoc(doc(db, "meta", "bootstrap"))).exists();
 export async function bootstrapAdmin(uid, email, name) {
@@ -371,3 +378,31 @@ export async function bootstrapAdmin(uid, email, name) {
   await b.commit();
 }
 export { serverTimestamp };
+
+
+// ------------------------------------------------------------------
+//  ล้างข้อมูลทดสอบ: ลบใบเบิก/รูป/ประวัติโอนของสาขา แล้วรีเซ็ตยอด + ตัวนับเลขที่เอกสาร (บัญชีเท่านั้น)
+// ------------------------------------------------------------------
+export async function resetBranchData(branchIds, onProgress) {
+  const out = { requests: 0, receipts: 0, replenishments: 0 };
+  const sumSnap = await getDoc(summaryRef());
+  const sum = sumSnap.exists() ? sumSnap.data() : {};
+  for (const id of branchIds) {
+    for (const [col, key] of [["requests", "requests"], ["receipts", "receipts"], ["replenishments", "replenishments"]]) {
+      for (;;) {
+        const s = await getDocs(query(collection(db, col), where("branchId", "==", id), limit(400)));
+        if (s.empty) break;
+        const b = writeBatch(db); s.docs.forEach((x) => b.delete(x.ref)); await b.commit();
+        out[key] += s.size;
+        if (s.size < 400) break;
+      }
+    }
+    const fl = Number(sum[id]?.float) || 0;
+    const b = writeBatch(db);
+    b.update(branchRef(id), { balance: fl, pendingAmt: 0, pendingCnt: 0, seq: {} });
+    b.update(summaryRef(), { [`${id}.balance`]: fl, [`${id}.pendingAmt`]: 0, [`${id}.pendingCnt`]: 0, [`${id}.lastReplenishAt`]: null });
+    await b.commit();
+    onProgress && onProgress(id);
+  }
+  return out;
+}

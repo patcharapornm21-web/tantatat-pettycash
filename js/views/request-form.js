@@ -149,7 +149,7 @@ export default async function view(root, ctx, { params }) {
           <div class="field"><label for="i-sup">Supplier / ผู้รับเงิน</label><input class="inp" id="i-sup" maxlength="100" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value="${esc(cur.supplier || "")}"></div>
           <div class="field"><label for="i-req">ผู้ขอเบิก *</label><input class="inp" id="i-req" maxlength="60" placeholder="ชื่อพนักงานที่ขอเบิก" value="${esc(cur.requester || "")}"></div>
         </div>
-        <div class="field"><label for="i-note">หมายเหตุ</label><input class="inp" id="i-note" maxlength="150" placeholder="(ถ้ามี)" value="${esc(cur.note || "")}"></div>
+        <div class="field"><label for="i-note">หมายเหตุ <span class="small muted" id="i-note-h">(ถ้ามี)</span></label><input class="inp" id="i-note" maxlength="150" placeholder="(ถ้ามี) เช่น ค่าซื้ออุปกรณ์ หรือค่าเดินทางไปช่วยสาขา…" value="${esc(cur.note || "")}"></div>
         <div class="field"><label>รูปใบเสร็จ / สแกนเอกสาร</label>
           <div class="dropzone" id="dz"><div id="dz-in"></div></div>
           <div class="row wrap" style="margin-top:.5rem"><button class="btn ghost sm" type="button" id="pick"><span class="material-symbols-outlined">photo_library</span>เลือกรูป</button>
@@ -197,12 +197,16 @@ export default async function view(root, ctx, { params }) {
     el.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.files || [])][0]; if (f) handle(f); });
     paintDz();
 
+    const isOther = () => q("#i-cat").value.startsWith("อื่นๆ");
+    const syncOther = () => { q("#i-note-h").textContent = isOther() ? "* จำเป็นเมื่อเลือก “อื่นๆ” — ระบุรายละเอียด เช่น ค่าซื้ออุปกรณ์ / ค่าเดินทางไปช่วยสาขา…" : "(ถ้ามี)"; };
+    q("#i-cat").addEventListener("change", syncOther); syncOther();
     q("#i-save").onclick = () => {
       const v = { date: q("#i-date").value, docType: q("#i-doc").value, category: q("#i-cat").value, amount: +q("#i-amt").value, requester: q("#i-req").value.trim() };
       const bad = !v.date ? "#i-date" : !v.docType ? "#i-doc" : !v.category ? "#i-cat" : !(v.amount > 0) ? "#i-amt" : !v.requester ? "#i-req" : "";
       let wht = null;
       if (!bad && whtOn()) { const rate = +q("#w-rate").value, before = +q("#w-before").value; if (!rate || !(before > 0)) { q("#i-err").textContent = "กรอกอัตราภาษีและยอดก่อนหักภาษี"; return; } wht = { rate, before, amount: round2((before * rate) / 100) }; }
       if (bad) { q("#i-err").textContent = "กรอกข้อมูลที่มี * ให้ครบ"; q(bad).classList.add("err"); return; }
+      if (isOther() && !q("#i-note").value.trim()) { q("#i-err").textContent = "เลือก “อื่นๆ” กรุณาระบุรายละเอียดในช่องหมายเหตุ"; q("#i-note").classList.add("err"); return; }
       const item = { ...v, amount: round2(v.amount), supplier: q("#i-sup").value.trim(), note: q("#i-note").value.trim(), wht, receipt };
       if (idx != null) form.items[idx] = item; else form.items.push(item);
       m.close(); draw();
