@@ -1,7 +1,7 @@
 import { esc, baht, money, thDate, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
 import { subRequest, loadReceipts, decideRequest, cancelRequest } from "../data.js";
 import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
-import { zoom } from "./request-form.js";
+import { viewFile, thumbCell } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
 import { bus } from "../app.js";
 import { ensureSignature } from "../signature.js";
@@ -47,13 +47,13 @@ export default async function view(root, ctx, { params }) {
 
         <div class="card flat">
           <div class="card-h" style="padding:1.25rem 1.5rem 0"><h3>รายการค่าใช้จ่าย (${r.items.length})</h3></div>
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">หลักฐาน</th></tr></thead><tbody>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>รายการ</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">หลักฐาน</th></tr></thead><tbody>
           ${r.items.map((it, i) => `<tr><td>${i + 1}</td><td>${thDate(it.date || r.date)}</td>
-            <td><b>${esc(it.supplier || it.desc || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}% · ก่อนหัก ${money(it.wht.before)} · หัก ${money(it.wht.amount)}</span></div>` : ""}</td>
+            <td>${esc(it.desc || "-")}</td><td><b>${esc(it.supplier || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}% · ก่อนหัก ${money(it.wht.before)} · หัก ${money(it.wht.amount)}</span></div>` : ""}</td>
             <td class="small">${esc(it.docType || "-")}</td><td><span class="cat-chip">${esc(it.category)}</span></td><td>${esc(it.requester || r.requesterName || "")}</td>
             <td class="r num"><b>${money(it.amount)}</b></td>
-            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีรูป</span>` : receipts[i] ? `<img class="thumb" src="${receipts[i]}" data-zoom="${i}" alt="ใบเสร็จ">` : `<span class="small muted">กำลังโหลด…</span>`}</td></tr>`).join("")}
-          </tbody><tfoot><tr><td colspan="6" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
+            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>` : receipts[i] ? thumbCell(receipts[i], i) : `<span class="small muted">กำลังโหลด…</span>`}</td></tr>`).join("")}
+          </tbody><tfoot><tr><td colspan="7" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
         </div>
 
         ${r.requesterSig || r.approverSig ? `<div class="card"><h3 style="margin-bottom:1rem">ลายเซ็น</h3><div class="row wrap" style="gap:2rem;align-items:flex-end">
@@ -62,7 +62,7 @@ export default async function view(root, ctx, { params }) {
         </div></div>` : ""}
 
         ${r.items.some((i) => i.hasReceipt) ? `<div class="card"><h3 style="margin-bottom:1rem">เอกสารแนบ</h3><div class="rcpt-grid">
-          ${r.items.map((it, i) => it.hasReceipt && receipts[i] ? `<div class="rcpt" data-zoom="${i}"><img src="${receipts[i]}" alt=""><div><b>${esc(it.supplier || it.desc || "")}</b><br><span class="muted">${baht(it.amount)}</span></div></div>` : "").join("")}
+          ${r.items.map((it, i) => (receipts[i] || []).map((f, n) => `<div class="rcpt" data-zoom="${i}" data-n="${n}">${f.kind === "pdf" ? `<div style="height:110px;display:flex;align-items:center;justify-content:center"><span class="material-symbols-outlined" style="font-size:56px;color:#dc2626">picture_as_pdf</span></div>` : `<img src="${f.src}" alt="">`}<div><b>${esc(it.desc || it.supplier || "")}</b><br><span class="muted">${baht(it.amount)}${f.kind === "pdf" ? " · PDF" : ""}</span></div></div>`).join("")).join("")}
         </div></div>` : ""}
       </div>
 
@@ -100,7 +100,7 @@ export default async function view(root, ctx, { params }) {
 
   const wire = () => {
     $("#print").onclick = () => window.print();
-    $$("[data-zoom]").forEach((el) => (el.onclick = () => zoom(receipts[+el.dataset.zoom])));
+    $$("[data-zoom]").forEach((el) => (el.onclick = () => viewFile((receipts[+el.dataset.zoom] || [])[+(el.dataset.n || 0)])));
     const cd = $("#cancel-doc");
     if (cd) cd.onclick = () => {
       const m = openModal(`<div class="modal-body"><h3 class="modal-title">ยกเลิกเอกสาร ${esc(req.docNo)}</h3>
@@ -132,7 +132,7 @@ export default async function view(root, ctx, { params }) {
   const unsub = subRequest(id, async (r) => {
     req = r; first = false;
     if (r) {
-      const key = r.items.map((i) => i.hasReceipt ? 1 : 0).join("") + r.items.length;
+      const key = r.items.map((i) => (i.fileMeta || []).length || (i.hasReceipt ? 1 : 0)).join("-") + "|" + r.items.length + "|" + (r.editCount || 0);
       draw();
       if (key !== rcKey) { rcKey = key; receipts = {}; try { receipts = await loadReceipts(r); } catch (e) { console.error(e); } if (req) draw(); }
     } else draw();

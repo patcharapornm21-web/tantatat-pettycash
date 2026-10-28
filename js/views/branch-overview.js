@@ -18,7 +18,7 @@ export default async function view(root, ctx) {
     const pct = fl > 0 ? Math.max(0, Math.min(100, (bal / fl) * 100)) : 0;
     const low = pct < APP_SETTINGS.lowBalancePct, crit = pct < APP_SETTINGS.lowBalancePct / 2;
     const reqs = (month === curMonth() ? ctx.branchReqs.filter((r) => r.month === month || r.status === "pending" || r.status === "returned") : (extra || []))
-      .slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.updatedAt || 0) - (a.updatedAt || 0));
+      .slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.docNo || "").localeCompare(a.docNo || ""));
     const returned = ctx.branchReqs.filter((r) => r.status === "returned");
 
     root.innerHTML = pageHeader({

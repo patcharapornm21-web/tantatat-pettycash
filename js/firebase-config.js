@@ -17,6 +17,8 @@ export const APP_SETTINGS = {
   // วงเงินคงเหลือต่ำกว่า % นี้ของวงเงินตั้งต้น = แจ้งเตือนสีเหลือง/แดงในหน้าบัญชี
   lowBalancePct: 30,
   // ขนาดรูปใบเสร็จสูงสุดหลังบีบอัด (KB) — 40KB x 10,000 ใบ ≈ 400MB (โควต้าฟรี 1GB)
+  maxPdfKB: 600,
+  maxFilesPerItem: 5,
   maxImageKB: 40,
   // จำนวนใบเสร็จสูงสุดต่อ 1 ใบเบิก (เอกสาร Firestore จำกัด 1MB)
   maxItemsPerRequest: 20,

@@ -28,7 +28,7 @@ export default async function view(root, ctx) {
   const paint = () => {
     const q = st.q.trim().toLowerCase();
     const rows = st.rows.filter((r) => !q || `${r.docNo} ${r.requesterName} ${r.branchName}`.toLowerCase().includes(q))
-      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.updatedAt || 0) - (a.updatedAt || 0));
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.docNo || "").localeCompare(a.docNo || ""));
     $("#info").textContent = st.loading ? "กำลังโหลด…" : `แสดง ${rows.length} จาก ${st.rows.length} รายการ`;
     $("#out").innerHTML = st.loading ? `<div class="empty"><div class="spin" style="margin:0 auto 1rem"></div>กำลังโหลด…</div>` : rows.length ? `
       <div class="tbl-wrap mob-hide"><table class="tbl"><thead><tr><th>เลขที่เอกสาร</th><th>วันที่</th>${role !== "branch" ? "<th>สาขา</th>" : ""}<th>ผู้ขอเบิก</th><th class="c">รายการ</th><th class="r">ยอดรวม</th><th>สถานะ</th></tr></thead><tbody>

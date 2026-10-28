@@ -27,7 +27,7 @@ export default async function view(root, ctx, { params }) {
     }
     const rc = await loadReceipts(editReq);
     form.date = editReq.date; form.note = editReq.note || "";
-    form.items = editReq.items.map((it, i) => ({ ...it, date: it.date || editReq.date, requester: it.requester || editReq.requesterName, receipt: rc[i] || null }));
+    form.items = editReq.items.map((it, i) => ({ ...it, date: it.date || editReq.date, requester: it.requester || editReq.requesterName, files: (rc[i] || []).map((x) => ({ data: x.src, kind: x.kind, name: x.name })) }));
   }
 
   let submitted = false;
@@ -53,7 +53,7 @@ export default async function view(root, ctx, { params }) {
           <div class="grid g3 keep" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
             <div class="field"><label>สาขา</label><input class="inp" readonly value="${esc(b ? (String(b.name).startsWith(b.id) ? b.name : `${b.id}-${b.name}`) : ctx.profile.branchId)}"></div>
             <div class="field"><label>ผู้ยื่นใบเบิก</label><input class="inp" readonly value="${esc(ctx.profile.name)}"></div>
-            <div class="field"><label for="fdate">วันที่ยื่นเบิก *</label><input class="inp" id="fdate" type="date" value="${form.date}" max="${todayISO()}" ${editReq ? "disabled" : ""}></div>
+            <div class="field"><label for="fdate">วันที่ในเอกสาร * <span class="small muted">(กำหนดเดือน/เลขที่เอกสาร — เบิกย้อนหลังได้)</span></label><input class="inp" id="fdate" type="date" value="${form.date}" max="${todayISO()}" ${editReq ? "disabled" : ""}></div>
           </div>
           <div class="field" style="margin-top:1rem"><label for="fnote">หมายเหตุใบเบิก</label>
             <textarea class="inp" id="fnote" placeholder="เช่น ค่าใช้จ่ายประจำเดือน">${esc(form.note)}</textarea></div>
@@ -65,12 +65,12 @@ export default async function view(root, ctx, { params }) {
           <div class="card-h"><h3>รายการค่าใช้จ่าย <span class="muted small">(${form.items.length}/${APP_SETTINGS.maxItemsPerRequest})</span></h3>
             <button class="btn soft sm" id="add"><span class="material-symbols-outlined">add</span>เพิ่มรายการ</button></div>
           ${form.items.length ? `
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">ใบเสร็จ</th><th></th></tr></thead><tbody>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>รายการ</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">ใบเสร็จ</th><th></th></tr></thead><tbody>
           ${form.items.map((it, i) => `<tr><td>${i + 1}</td><td>${thDate(it.date)}</td>
-            <td><b>${esc(it.supplier || it.desc || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}%</span></div>` : ""}</td>
+            <td>${esc(it.desc || "-")}</td><td><b>${esc(it.supplier || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}%</span></div>` : ""}</td>
             <td class="small">${esc(it.docType || "-")}</td><td><span class="cat-chip">${esc(it.category)}</span></td><td>${esc(it.requester || "")}</td>
             <td class="r num"><b>${money(it.amount)}</b></td>
-            <td class="c">${it.receipt ? `<img class="thumb" src="${it.receipt}" data-zoom="${i}" alt="ใบเสร็จ">` : `<span class="chip st-pending">ไม่มีรูป</span>`}</td>
+            <td class="c">${thumbCell(it.files || [], i)}</td>
             <td class="r" style="white-space:nowrap"><button class="icon-btn" data-edit="${i}" aria-label="แก้ไข"><span class="material-symbols-outlined">edit</span></button>
               <button class="icon-btn" data-del="${i}" aria-label="ลบ"><span class="material-symbols-outlined" style="color:var(--bad)">delete</span></button></td></tr>`).join("")}
           </tbody></table></div>` :
@@ -85,7 +85,7 @@ export default async function view(root, ctx, { params }) {
           <div class="totalbar"><span class="muted">ยอดรวมสุทธิ</span><b class="num">${baht(t)}</b></div>
           <div class="stack" style="gap:.5rem;margin:1rem 0;font-size:13px">
             <div class="row between"><span class="muted">จำนวนรายการ</span><b>${form.items.length}</b></div>
-            <div class="row between"><span class="muted">แนบใบเสร็จแล้ว</span><b>${form.items.filter((i) => i.receipt).length}/${form.items.length}</b></div>
+            <div class="row between"><span class="muted">แนบใบเสร็จแล้ว</span><b>${form.items.filter((i) => (i.files || []).length).length}/${form.items.length}</b></div>
             <div class="row between"><span class="muted">คงเหลือหลังส่งเบิก</span><b class="num" style="${after < 0 ? "color:var(--bad)" : ""}">${baht(after)}</b></div>
           </div>
           ${after < 0 ? `<div class="notice ${blocked ? "bad" : "warn"}" style="margin-bottom:1rem"><span class="material-symbols-outlined">${blocked ? "block" : "warning"}</span><div>${blocked ? "ยอดเบิกเกินยอดคงเหลือ และระบบไม่อนุญาตให้ติดลบ" : "ยอดเบิกเกินวงเงินคงเหลือ — ยอดจะติดลบ (สาขาสำรองจ่าย) จนกว่าบริษัทโอนชดเชย"}</div></div>` : ""}
@@ -107,12 +107,12 @@ export default async function view(root, ctx, { params }) {
     $$("[data-del]").forEach((b) => (b.onclick = async () => {
       if (await confirmDialog("ลบรายการนี้ออกจากใบเบิก?", { danger: true, okText: "ลบ" })) { syncTop(); form.items.splice(+b.dataset.del, 1); draw(); }
     }));
-    $$("[data-zoom]").forEach((im) => (im.onclick = () => zoom(form.items[+im.dataset.zoom].receipt)));
+    $$("[data-zoom]").forEach((im) => (im.onclick = () => viewFile((form.items[+im.dataset.zoom].files || [])[0])));
     $("#submit").onclick = async () => {
       syncTop();
       if (!form.items.length) return;
       if (editReq && !form.editReason.trim()) { $("#freason").classList.add("err"); $("#freason").focus(); return toast("กรุณาระบุเหตุผลที่แก้ไข", "warn"); }
-      const noRc = form.items.filter((i) => !i.receipt).length;
+      const noRc = form.items.filter((i) => !(i.files || []).length).length;
       const msg = `ยืนยันส่งใบเบิกยอดรวม ${baht(total())} (${form.items.length} รายการ)\n${editReq && editReq.status !== "returned" ? "ยอดคงเหลือจะปรับตามส่วนต่าง" : "ยอดคงเหลือจะถูกหักทันที"}` + (noRc ? `\n\n⚠️ มี ${noRc} รายการที่ไม่ได้แนบใบเสร็จ` : "");
       if (!(await confirmDialog(msg, { okText: "ส่งขออนุมัติ" }))) return;
       try {
@@ -126,8 +126,8 @@ export default async function view(root, ctx, { params }) {
 
   function itemModal(idx) {
     if (idx == null && form.items.length >= APP_SETTINGS.maxItemsPerRequest) return toast(`เพิ่มได้สูงสุด ${APP_SETTINGS.maxItemsPerRequest} รายการต่อใบเบิก`, "warn");
-    const cur = idx != null ? { ...form.items[idx] } : { date: form.date, docType: "", category: "", amount: "", supplier: "", requester: ctx.profile.name, note: "", wht: null, receipt: null };
-    let receipt = cur.receipt; let rcInfo = receipt ? "แนบแล้ว" : "";
+    const cur = idx != null ? { ...form.items[idx] } : { date: form.date, docType: "", category: "", amount: "", desc: "", supplier: "", requester: ctx.profile.name, note: "", wht: null, files: [] };
+    let files = (cur.files || []).slice();
     const hasWht = !!cur.wht;
     const m = openModal(`
       <div class="modal-body">
@@ -145,17 +145,18 @@ export default async function view(root, ctx, { params }) {
           <div class="field"><label>อัตราภาษี *</label><select class="inp" id="w-rate"><option value="">— เลือก —</option>${APP_SETTINGS.whtRates.map(([r, l]) => `<option value="${r}" ${cur.wht && cur.wht.rate === r ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>
           <div class="field"><label>ยอดก่อนหักภาษี (฿) *</label><input class="inp num" id="w-before" type="number" min="0.01" step="0.01" value="${cur.wht ? cur.wht.before : ""}"></div>
           <div class="field"><label>ภาษีที่หัก / จ่ายสุทธิ</label><div class="inp" id="w-out" style="background:#fff7ed;color:#c2410c;font-weight:700">—</div></div></div></div>
+        <div class="field"><label for="i-desc">รายการ * <span class="small muted">เช่น ค่าไปซื้อของ, ค่าน้ำดื่ม</span></label><input class="inp" id="i-desc" maxlength="120" placeholder="ระบุรายการที่เบิก" value="${esc(cur.desc || "")}"></div>
         <div class="grid g2 keep" style="grid-template-columns:1fr 1fr;gap:.75rem">
           <div class="field"><label for="i-sup">Supplier / ผู้รับเงิน</label><input class="inp" id="i-sup" maxlength="100" placeholder="ชื่อร้านค้า / ผู้รับเงิน" value="${esc(cur.supplier || "")}"></div>
           <div class="field"><label for="i-req">ผู้ขอเบิก *</label><input class="inp" id="i-req" maxlength="60" placeholder="ชื่อพนักงานที่ขอเบิก" value="${esc(cur.requester || "")}"></div>
         </div>
         <div class="field"><label for="i-note">หมายเหตุ <span class="small muted" id="i-note-h">(ถ้ามี)</span></label><input class="inp" id="i-note" maxlength="150" placeholder="(ถ้ามี) เช่น ค่าซื้ออุปกรณ์ หรือค่าเดินทางไปช่วยสาขา…" value="${esc(cur.note || "")}"></div>
-        <div class="field"><label>รูปใบเสร็จ / สแกนเอกสาร</label>
+        <div class="field"><label>รูปใบเสร็จ / สแกนเอกสาร <span class="small muted">(หลายรูป + PDF · สูงสุด ${APP_SETTINGS.maxFilesPerItem} ไฟล์)</span></label>
           <div class="dropzone" id="dz"><div id="dz-in"></div></div>
-          <div class="row wrap" style="margin-top:.5rem"><button class="btn ghost sm" type="button" id="pick"><span class="material-symbols-outlined">photo_library</span>เลือกรูป</button>
-            <button class="btn ghost sm" type="button" id="cam"><span class="material-symbols-outlined">photo_camera</span>ถ่ายรูป</button>
-            <button class="btn ghost sm hide" type="button" id="rm"><span class="material-symbols-outlined">delete</span>เอารูปออก</button></div>
-          <input type="file" id="f1" accept="image/*" class="hide"><input type="file" id="f2" accept="image/*" capture="environment" class="hide">
+          <div id="fl" class="row wrap" style="margin-top:.5rem;gap:.5rem"></div>
+          <div class="row wrap" style="margin-top:.5rem"><button class="btn ghost sm" type="button" id="pick"><span class="material-symbols-outlined">attach_file</span>เลือกรูป / PDF</button>
+            <button class="btn ghost sm" type="button" id="cam"><span class="material-symbols-outlined">photo_camera</span>ถ่ายรูป</button></div>
+          <input type="file" id="f1" accept="image/*,application/pdf" multiple class="hide"><input type="file" id="f2" accept="image/*" capture="environment" class="hide">
         </div>
         <div id="i-err" class="small" style="color:var(--bad)"></div>
       </div>
@@ -176,25 +177,37 @@ export default async function view(root, ctx, { params }) {
     if (hasWht) calcWht();
 
     const paintDz = () => {
-      q("#dz-in").innerHTML = receipt
-        ? `<img src="${receipt}" alt="ตัวอย่างใบเสร็จ"><div class="small muted">${esc(rcInfo)}</div>`
-        : `<span class="material-symbols-outlined" style="font-size:36px;color:var(--primary)">cloud_upload</span><div><b>ลากรูปมาวาง หรือแตะเพื่อเลือก</b></div><div class="small muted">ระบบย่อ/บีบอัดอัตโนมัติให้ ≤ ${APP_SETTINGS.maxImageKB}KB</div>`;
-      q("#rm").classList.toggle("hide", !receipt);
+      q("#dz-in").innerHTML = `<span class="material-symbols-outlined" style="font-size:36px;color:var(--primary)">cloud_upload</span><div><b>ลากไฟล์มาวาง หรือแตะเพื่อเลือก</b></div><div class="small muted">รูปภาพหลายใบ (บีบอัดอัตโนมัติ ≤ ${APP_SETTINGS.maxImageKB}KB) หรือ PDF (≤ ${APP_SETTINGS.maxPdfKB}KB)</div>`;
+      q("#fl").innerHTML = files.map((x, k) => `<div class="row" style="gap:.4rem;border:1px solid #e2e8f0;border-radius:12px;padding:.3rem .5rem;background:#fff">
+        ${x.kind === "pdf" ? `<span class="material-symbols-outlined" style="color:#dc2626">picture_as_pdf</span>` : `<img src="${x.data}" alt="" style="width:36px;height:36px;object-fit:cover;border-radius:6px;cursor:pointer" data-view="${k}">`}
+        <span class="small" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.name || (x.kind === "pdf" ? "เอกสาร PDF" : "รูป " + (k + 1)))}</span>
+        <button class="icon-btn" type="button" data-rmf="${k}" aria-label="เอาออก"><span class="material-symbols-outlined" style="font-size:18px">close</span></button></div>`).join("");
+      q("#fl").querySelectorAll("[data-rmf]").forEach((bt) => (bt.onclick = () => { files.splice(+bt.dataset.rmf, 1); paintDz(); }));
+      q("#fl").querySelectorAll("[data-view]").forEach((im) => (im.onclick = () => viewFile(files[+im.dataset.view])));
     };
-    const handle = async (file) => {
-      if (!file) return; q("#i-err").textContent = "";
-      try {
-        const r = await busy(() => compressImage(file), "กำลังบีบอัดรูป…");
-        receipt = r.dataUrl; rcInfo = `${r.width}×${r.height}px · ${(r.bytes / 1024).toFixed(1)} KB (${r.mime.replace("image/", "").toUpperCase()}) — บีบอัดแล้ว`; paintDz();
-      } catch (e) { q("#i-err").textContent = e.message; }
+    const handle = async (list) => {
+      q("#i-err").textContent = "";
+      for (const file of [...(list || [])]) {
+        if (files.length >= APP_SETTINGS.maxFilesPerItem) { q("#i-err").textContent = `แนบได้สูงสุด ${APP_SETTINGS.maxFilesPerItem} ไฟล์ต่อรายการ`; break; }
+        try {
+          if (file.type === "application/pdf") {
+            if (file.size > APP_SETTINGS.maxPdfKB * 1024) throw new Error(`ไฟล์ PDF “${file.name}” ใหญ่เกิน ${APP_SETTINGS.maxPdfKB}KB (ระบบฟรีไม่รองรับไฟล์ใหญ่) กรุณาบีบอัด PDF หรือแปลงเป็นรูปภาพ`);
+            const data = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => rej(new Error("อ่านไฟล์ PDF ไม่ได้")); fr.readAsDataURL(file); });
+            files.push({ data, kind: "pdf", name: file.name });
+          } else {
+            const r = await busy(() => compressImage(file), "กำลังบีบอัดรูป…");
+            files.push({ data: r.dataUrl, kind: "image", name: file.name || "" });
+          }
+        } catch (e) { q("#i-err").textContent = e.message; }
+      }
+      paintDz();
     };
     q("#dz").onclick = () => q("#f1").click(); q("#pick").onclick = () => q("#f1").click(); q("#cam").onclick = () => q("#f2").click();
-    q("#f1").onchange = (e) => handle(e.target.files[0]); q("#f2").onchange = (e) => handle(e.target.files[0]);
-    q("#rm").onclick = () => { receipt = null; rcInfo = ""; paintDz(); };
+    q("#f1").onchange = (e) => { handle(e.target.files); e.target.value = ""; }; q("#f2").onchange = (e) => { handle(e.target.files); e.target.value = ""; };
     ["dragenter", "dragover"].forEach((ev) => q("#dz").addEventListener(ev, (e) => { e.preventDefault(); q("#dz").classList.add("drag"); }));
     ["dragleave", "drop"].forEach((ev) => q("#dz").addEventListener(ev, (e) => { e.preventDefault(); q("#dz").classList.remove("drag"); }));
-    q("#dz").addEventListener("drop", (e) => handle(e.dataTransfer.files[0]));
-    el.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.files || [])][0]; if (f) handle(f); });
+    q("#dz").addEventListener("drop", (e) => handle(e.dataTransfer.files));
+    el.addEventListener("paste", (e) => { const fl = e.clipboardData?.files; if (fl && fl.length) handle(fl); });
     paintDz();
 
     const isOther = () => q("#i-cat").value.startsWith("อื่นๆ");
@@ -202,12 +215,12 @@ export default async function view(root, ctx, { params }) {
     q("#i-cat").addEventListener("change", syncOther); syncOther();
     q("#i-save").onclick = () => {
       const v = { date: q("#i-date").value, docType: q("#i-doc").value, category: q("#i-cat").value, amount: +q("#i-amt").value, requester: q("#i-req").value.trim() };
-      const bad = !v.date ? "#i-date" : !v.docType ? "#i-doc" : !v.category ? "#i-cat" : !(v.amount > 0) ? "#i-amt" : !v.requester ? "#i-req" : "";
+      const bad = !v.date ? "#i-date" : !v.docType ? "#i-doc" : !v.category ? "#i-cat" : !q("#i-desc").value.trim() ? "#i-desc" : !(v.amount > 0) ? "#i-amt" : !v.requester ? "#i-req" : "";
       let wht = null;
       if (!bad && whtOn()) { const rate = +q("#w-rate").value, before = +q("#w-before").value; if (!rate || !(before > 0)) { q("#i-err").textContent = "กรอกอัตราภาษีและยอดก่อนหักภาษี"; return; } wht = { rate, before, amount: round2((before * rate) / 100) }; }
       if (bad) { q("#i-err").textContent = "กรอกข้อมูลที่มี * ให้ครบ"; q(bad).classList.add("err"); return; }
       if (isOther() && !q("#i-note").value.trim()) { q("#i-err").textContent = "เลือก “อื่นๆ” กรุณาระบุรายละเอียดในช่องหมายเหตุ"; q("#i-note").classList.add("err"); return; }
-      const item = { ...v, amount: round2(v.amount), supplier: q("#i-sup").value.trim(), note: q("#i-note").value.trim(), wht, receipt };
+      const item = { ...v, amount: round2(v.amount), desc: q("#i-desc").value.trim(), supplier: q("#i-sup").value.trim(), note: q("#i-note").value.trim(), wht, files };
       if (idx != null) form.items[idx] = item; else form.items.push(item);
       m.close(); draw();
     };
@@ -221,4 +234,22 @@ export default async function view(root, ctx, { params }) {
 export function zoom(src) {
   const d = document.createElement("div"); d.className = "lightbox"; d.innerHTML = `<img src="${src}" alt="ใบเสร็จ">`;
   d.onclick = () => d.remove(); document.body.appendChild(d);
+}
+
+/** เปิดไฟล์แนบ: รูป → Lightbox, PDF → แท็บใหม่ (แปลง data URL เป็น Blob เพื่อให้เบราว์เซอร์เปิดได้) */
+export function viewFile(f) {
+  if (!f) return;
+  const src = f.src || f.data;
+  if (f.kind !== "pdf") return zoom(src);
+  try {
+    const [h, b64] = src.split(","); const bin = atob(b64); const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    window.open(URL.createObjectURL(new Blob([u8], { type: "application/pdf" })), "_blank");
+  } catch { window.open(src, "_blank"); }
+}
+
+export function thumbCell(files, i) {
+  if (!files.length) return `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>`;
+  const f = files[0]; const src = f.src || f.data;
+  return `${f.kind === "pdf" ? `<span class="material-symbols-outlined" style="color:#dc2626;cursor:pointer" data-zoom="${i}">picture_as_pdf</span>` : `<img class="thumb" src="${src}" data-zoom="${i}" alt="ใบเสร็จ">`}${files.length > 1 ? `<div class="tiny muted">+${files.length - 1} ไฟล์</div>` : ""}`;
 }

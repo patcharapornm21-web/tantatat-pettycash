@@ -3,7 +3,7 @@
 //  meta/summary        1 เอกสาร เก็บยอดทั้ง 100 สาขา (ฟิลด์ระดับบนสุด = รหัสสาขา "001".."100")
 //  branches/{id}       สำเนายอดของสาขาเดียว (พนักงานสาขาอ่านเฉพาะของตัวเอง) + ตัวนับเลขที่เอกสาร
 //  requests/{id}       ใบเบิก (ไม่มีรูป เพื่อให้ Listener ของฝ่ายบัญชีเบา)
-//  receipts/{id__n}    รูปใบเสร็จ Base64 ≤40KB ต่อรายการ (โหลดเฉพาะตอนเปิดดูรายละเอียด)
+//  receipts/{id__i_n}  ไฟล์แนบ (รูป Base64 ≤40KB / PDF ≤600KB) หลายไฟล์ต่อรายการ (โหลดเฉพาะตอนเปิดดูรายละเอียด)
 //  replenishments/{id} ประวัติการโอนเงินชดเชย
 //  users/{uid}         โปรไฟล์ + สิทธิ์ (role, branchId, region, active)
 import {
@@ -120,7 +120,7 @@ export async function assignBranchRegions(changes /* [{id, region}] */) {
     ops.push((b) => { b.update(branchRef(id), { region }); b.update(summaryRef(), { [`${id}.region`]: region }); });
     open.docs.forEach((d) => {
       ops.push((b) => b.update(d.ref, { region }));
-      (d.data().items || []).forEach((it, i) => { if (it.hasReceipt) ops.push((b) => b.update(doc(db, "receipts", receiptId(d.id, i)), { region })); });
+      (d.data().items || []).forEach((it, i) => receiptIds(d.id, it, i).forEach((rid) => ops.push((b) => b.update(doc(db, "receipts", rid), { region }))));
     });
     for (let i = 0; i < ops.length; i += 400) { const b = writeBatch(db); ops.slice(i, i + 400).forEach((f) => f(b)); await b.commit(); }
   }
@@ -133,14 +133,18 @@ export const saveSettings = (data) => setDoc(doc(db, "meta", "settings"), data, 
 // ------------------------------------------------------------------
 //  ใบเบิก
 // ------------------------------------------------------------------
-const receiptId = (reqId, i) => `${reqId}__${i}`;
+const receiptId = (reqId, i, n = null) => (n == null ? `${reqId}__${i}` : `${reqId}__${i}_${n}`);
+/** รหัสเอกสารไฟล์แนบทั้งหมดของรายการที่ i (รองรับใบเก่าที่มี 1 รูป และใบใหม่ที่มีหลายไฟล์) */
+const receiptIds = (reqId, it, i) => (it.fileMeta && it.fileMeta.length ? it.fileMeta.map((_, n) => receiptId(reqId, i, n)) : it.hasReceipt ? [receiptId(reqId, i)] : []);
 
+/** คืนค่า { [index]: [{src, kind, name}] } */
 export async function loadReceipts(req) {
   const out = {};
   await Promise.all((req.items || []).map(async (it, i) => {
-    if (!it.hasReceipt) return;
-    const s = await getDoc(doc(db, "receipts", receiptId(req.id, i)));
-    if (s.exists()) out[i] = s.data().url || s.data().data;
+    const ids = receiptIds(req.id, it, i); if (!ids.length) return;
+    const got = await Promise.all(ids.map((id) => getDoc(doc(db, "receipts", id))));
+    out[i] = got.map((s, n) => (s.exists() ? { src: s.data().url || s.data().data, kind: s.data().kind || it.fileMeta?.[n]?.kind || "image", name: it.fileMeta?.[n]?.name || "" } : null)).filter(Boolean);
+    if (!out[i].length) delete out[i];
   }));
   return out;
 }
@@ -150,25 +154,32 @@ export async function loadReceipts(req) {
  * form = { date, note, items:[{desc,category,qty,amount,receipt(dataURL|null)}] }
  */
 export async function submitRequest(profile, branch, form, editReq = null, settings = null) {
+  const filesOf = (it) => it.files || (it.receipt ? [{ data: it.receipt, kind: "image", name: "" }] : []);
   const items = form.items.map((it) => ({
-    date: it.date, docType: it.docType, category: it.category, supplier: (it.supplier || "").trim(),
+    date: it.date, docType: it.docType, category: it.category, supplier: (it.supplier || "").trim(), desc: (it.desc || "").trim(),
     requester: (it.requester || "").trim(), note: (it.note || "").trim(),
-    amount: round2(it.amount), hasReceipt: !!it.receipt,
+    amount: round2(it.amount), hasReceipt: filesOf(it).length > 0,
+    fileMeta: filesOf(it).map((f) => ({ kind: f.kind || "image", name: (f.name || "").slice(0, 80) })),
     ...(it.wht && it.wht.rate ? { wht: { rate: Number(it.wht.rate), before: round2(it.wht.before), amount: round2(it.wht.amount) } } : {}),
   }));
   const total = round2(items.reduce((s, i) => s + i.amount, 0));
   if (!items.length || total <= 0) throw new Error("กรุณาเพิ่มรายการอย่างน้อย 1 รายการ และยอดรวมต้องมากกว่า 0");
 
   // เตรียมรูป (Cloudinary → เก็บ URL, ปกติเก็บ Base64) ก่อนเปิด Transaction
-  const receiptPayload = [];
+  const receiptPayload = []; // [itemIndex] -> [payload]
   for (let i = 0; i < form.items.length; i++) {
-    const r = form.items[i].receipt;
-    if (!r) { receiptPayload.push(null); continue; }
-    if (r.startsWith("http") || !cloudinaryEnabled()) receiptPayload.push(r.startsWith("http") ? { url: r } : { data: r });
-    else receiptPayload.push({ url: await uploadToCloudinary(r) });
+    const list = [];
+    for (const f of filesOf(form.items[i])) {
+      const r = f.data || f.src;
+      if (!r) continue;
+      const kind = f.kind || "image";
+      if (r.startsWith("http")) list.push({ url: r, kind });
+      else if (kind === "image" && cloudinaryEnabled()) list.push({ url: await uploadToCloudinary(r), kind });
+      else list.push({ data: r, kind });
+    }
+    receiptPayload.push(list);
   }
 
-  if (editReq && !(form.editReason || "").trim()) throw new Error("กรุณาระบุเหตุผลที่แก้ไขเอกสาร");
   const bid = profile.branchId;
   const ym = editReq ? editReq.month : monthKey(form.date);
   const now = Date.now();
@@ -218,12 +229,13 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
     };
     tx.set(requestRef(id), base);
 
-    receiptPayload.forEach((p, i) => {
-      if (p) tx.set(doc(db, "receipts", receiptId(id, i)), { requestId: id, branchId: bid, region: b.region, ...p });
-    });
-    if (editReq) { // ลบรูปส่วนเกินของรายการที่ถูกลบออก
-      for (let i = items.length; i < (editReq.items || []).length; i++)
-        if (editReq.items[i].hasReceipt) tx.delete(doc(db, "receipts", receiptId(id, i)));
+    const keep = new Set();
+    receiptPayload.forEach((list, i) => list.forEach((p, n) => {
+      const rid = receiptId(id, i, n); keep.add(rid);
+      tx.set(doc(db, "receipts", rid), { requestId: id, branchId: bid, region: b.region, ...p });
+    }));
+    if (cur) { // ลบไฟล์แนบเดิมที่ไม่ได้ใช้แล้ว
+      (cur.items || []).forEach((it, i) => receiptIds(id, it, i).forEach((rid) => { if (!keep.has(rid)) tx.delete(doc(db, "receipts", rid)); }));
     }
 
     tx.update(branchRef(bid), bPatch);
@@ -345,7 +357,7 @@ export async function purgeRequests(reqs) {
   const refs = [];
   reqs.forEach((r) => {
     refs.push(requestRef(r.id));
-    (r.items || []).forEach((it, i) => { if (it.hasReceipt) refs.push(doc(db, "receipts", receiptId(r.id, i))); });
+    (r.items || []).forEach((it, i) => receiptIds(r.id, it, i).forEach((rid) => refs.push(doc(db, "receipts", rid))));
   });
   for (let i = 0; i < refs.length; i += 450) {
     const b = writeBatch(db);

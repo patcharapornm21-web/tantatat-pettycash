@@ -32,11 +32,11 @@ export default async function view(root, ctx) {
       <td>${u.role === "branch" ? esc(u.branchId) : u.role === "approver" ? `ดูแล ${Object.values(ctx.summary || {}).filter((b) => b && b.region === u.region && u.region).length} สาขา` : "ทุกสาขา"}</td>
       <td>${u.active ? '<span class="chip st-approved">ใช้งาน</span>' : '<span class="chip st-rejected">ปิดใช้งาน</span>'}</td>
       <td class="r" style="white-space:nowrap"><button class="icon-btn" data-edit="${u.uid}" aria-label="แก้ไข"><span class="material-symbols-outlined">edit</span></button>
-        ${!u.active && u.uid !== ctx.profile.uid ? `<button class="icon-btn" data-del="${u.uid}" aria-label="ลบผู้ใช้" title="ลบผู้ใช้ (เฉพาะบัญชีที่ปิดใช้งาน)" style="color:var(--bad)"><span class="material-symbols-outlined">delete</span></button>` : ""}
-        <button class="icon-btn" data-reset="${esc(u.email)}" aria-label="ส่งลิงก์รีเซ็ตรหัสผ่าน" title="ส่งลิงก์รีเซ็ตรหัสผ่าน"><span class="material-symbols-outlined">lock_reset</span></button></td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">ยังไม่มีผู้ใช้</div></td></tr>`;
+        ${u.uid !== ctx.profile.uid ? `<button class="btn ghost sm" data-del="${u.uid}" title="ลบผู้ใช้" style="color:var(--bad)"><span class="material-symbols-outlined">delete</span>ลบ</button>` : ""}
+        <button class="btn ghost sm" data-reset="${esc(u.email)}" title="ส่งลิงก์ตั้งรหัสผ่านใหม่ไปที่อีเมลผู้ใช้"><span class="material-symbols-outlined">lock_reset</span>รีเซ็ตรหัส</button></td></tr>`).join("") || `<tr><td colspan="6"><div class="empty">ยังไม่มีผู้ใช้</div></td></tr>`;
     $$("[data-edit]").forEach((b) => (b.onclick = () => form(users.find((u) => u.uid === b.dataset.edit))));
     $$("[data-del]").forEach((b) => (b.onclick = async () => {
-      const t = users.find((x) => x.uid === b.dataset.del); if (!t || t.active) return;
+      const t = users.find((x) => x.uid === b.dataset.del); if (!t || t.uid === ctx.profile.uid) return;
       if (!(await confirmDialog(`ลบผู้ใช้ ${t.name} (${t.email}) ?\nโปรไฟล์จะถูกลบถาวร${t.role === "approver" ? " และสาขาที่ดูแลจะถูกปล่อยว่าง (ไม่มี ROM)" : ""}\n\nหมายเหตุ: บัญชีล็อกอินใน Firebase Authentication ต้องลบที่ Firebase Console เอง (ถ้าจะใช้อีเมลนี้สร้างใหม่ ระบบจะนำบัญชีเดิมกลับมาใช้ให้เมื่อใส่รหัสผ่านเดิม)`, { okText: "ลบผู้ใช้", danger: true }))) return;
       try {
         await busy(async () => {
@@ -49,7 +49,7 @@ export default async function view(root, ctx) {
         toast("ลบผู้ใช้แล้ว", "ok"); load();
       } catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
     }));
-    $$("[data-reset]").forEach((b) => (b.onclick = async () => { try { await sendPasswordResetEmail(auth, b.dataset.reset); toast("ส่งลิงก์รีเซ็ตรหัสผ่านแล้ว", "ok"); } catch (e) { toast(friendlyError(e), "err"); } }));
+    $$("[data-reset]").forEach((b) => (b.onclick = async () => { try { await sendPasswordResetEmail(auth, b.dataset.reset); toast("ส่งลิงก์ตั้งรหัสผ่านใหม่ไปที่ " + b.dataset.reset + " แล้ว", "ok", 6000); } catch (e) { toast(friendlyError(e), "err"); } }));
   };
   const load = async () => { try { users = await busy(listUsers, "กำลังโหลดผู้ใช้…"); paint(); } catch (e) { toast(friendlyError(e), "err", 7000); } };
 
