@@ -1,5 +1,5 @@
 import { esc, baht, money, thDate, dateRange, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
-import { subRequest, loadReceipts, decideRequest, decideItems, cancelRequest, attachReceipts } from "../data.js";
+import { subRequest, loadReceipts, decideRequest, decideItems, cancelRequest, attachReceipts, deleteRequest } from "../data.js";
 import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
 import { viewFile, thumbCell } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
@@ -35,6 +35,7 @@ export default async function view(root, ctx, { params }) {
       actions: `<button class="btn ghost no-print" id="print"><span class="material-symbols-outlined">print</span>พิมพ์ / PDF</button>
         ${mine && ["returned", "pending", "approved"].includes(st) ? `<a class="btn sky" href="#/new/${r.id}"><span class="material-symbols-outlined">edit</span>แก้ไขและส่งใหม่</a>
         <button class="btn ghost" id="cancel-doc" style="color:var(--bad)"><span class="material-symbols-outlined">block</span>ยกเลิกเอกสาร</button>` : ""}
+        ${ctx.role === "accounting" && st !== "replenished" ? `<button class="btn ghost" id="del-doc" style="color:var(--bad)"><span class="material-symbols-outlined">delete</span>ลบเอกสาร</button>` : ""}
         ${ctx.role === "accounting" && st === "approved" ? `<button class="btn ok" id="repl"><span class="material-symbols-outlined">payments</span>โอนชดเชยสาขานี้</button>` : ""}`,
     }) + `
     <div class="grid g-main">
@@ -122,6 +123,18 @@ export default async function view(root, ctx, { params }) {
         if (!reason) { m.el.querySelector("#cx-r").classList.add("err"); return toast("กรุณาระบุเหตุผลที่ยกเลิก", "warn"); }
         try { await busy(() => cancelRequest(req.id, reason, ctx.profile)); m.close(); toast(`ยกเลิก ${esc(req.docNo)} แล้ว`, "info"); }
         catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
+      };
+    };
+    const dl = $("#del-doc");
+    if (dl) dl.onclick = () => {
+      const m = openModal(`<div class="modal-body"><h3 class="modal-title">ลบเอกสาร ${esc(req.docNo)}</h3>
+        <div class="notice bad"><span class="material-symbols-outlined">warning</span><div class="small">ลบ<b>ถาวร</b>พร้อมรูปแนบ ${req.status === "pending" || req.status === "approved" ? `และคืนยอด <b>${baht(req.total)}</b> เข้ายอดคงเหลือสาขา ` : ""}เลขที่เอกสารของสาขานี้ในเดือนนั้นจะเรียงใหม่ (ใบหลังขยับเลขขึ้น เลขที่ลบกลับมาใช้ได้)</div></div>
+        <div class="field"><label for="dl-cf">พิมพ์คำว่า “ลบ” เพื่อยืนยัน</label><input class="inp" id="dl-cf" autocomplete="off"></div>
+        <div class="row" style="justify-content:flex-end;gap:.5rem;margin-top:1rem"><button class="btn ghost" data-close>ยกเลิก</button><button class="btn warn" id="dl-go">ลบเอกสาร</button></div></div>`);
+      m.el.querySelector("#dl-go").onclick = async () => {
+        if (m.el.querySelector("#dl-cf").value.trim() !== "ลบ") { m.el.querySelector("#dl-cf").classList.add("err"); return toast("พิมพ์คำว่า “ลบ” เพื่อยืนยัน", "warn"); }
+        try { const no = req.docNo; await busy(() => deleteRequest(req.id, ctx.profile), "กำลังลบ…"); m.close(); toast(`ลบ ${esc(no)} แล้ว`, "info"); location.hash = "#/overview"; }
+        catch (e) { console.error(e); toast(friendlyError(e), "err", 8000); }
       };
     };
     const rp = $("#repl");

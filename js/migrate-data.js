@@ -1,8 +1,10 @@
 // ข้อมูลย้ายระบบเดิม (พ.ย. 2569) — ใบเบิกของสาขาที่ยังไม่ได้บันทึกในระบบใหม่ (ไม่รวมสาขา 001, 002 ที่บัญชีบันทึกแล้ว และรายการเติมเงิน HQ)
+// sheetName = ชื่อสาขาในไฟล์เดิม — ระบบจับคู่สาขาในระบบใหม่ด้วยชื่อก่อน (รหัสในไฟล์เดิมของลาดพร้าว/อ่อนนุชไม่ตรงกับระบบใหม่)
 // จัดกลุ่ม 1 ใบเบิก = สาขา + วันที่ + สถานะ · วันที่แก้จาก Excel (d/m สลับกัน) เป็นเดือน 11 แล้ว
 export const LEGACY_DOCS = [
  {
   "branchId": "006",
+  "sheetName": "Ekkamai",
   "date": "2026-11-02",
   "status": "approved",
   "items": [
@@ -46,6 +48,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "006",
+  "sheetName": "Ekkamai",
   "date": "2026-11-03",
   "status": "approved",
   "items": [
@@ -65,6 +68,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "003",
+  "sheetName": "Rangsit",
   "date": "2026-11-03",
   "status": "approved",
   "items": [
@@ -83,6 +87,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "003",
+  "sheetName": "Rangsit",
   "date": "2026-11-04",
   "status": "approved",
   "items": [
@@ -101,6 +106,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "004",
+  "sheetName": "GMM",
   "date": "2026-11-03",
   "status": "approved",
   "items": [
@@ -120,6 +126,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "006",
+  "sheetName": "Ekkamai",
   "date": "2026-11-07",
   "status": "approved",
   "items": [
@@ -151,6 +158,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "010",
+  "sheetName": "Central Northville",
   "date": "2026-11-07",
   "status": "approved",
   "items": [
@@ -170,6 +178,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "012",
+  "sheetName": "Bangna",
   "date": "2026-11-04",
   "status": "approved",
   "items": [
@@ -189,6 +198,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "006",
+  "sheetName": "Ekkamai",
   "date": "2026-11-09",
   "status": "approved",
   "items": [
@@ -208,6 +218,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "010",
+  "sheetName": "Central Northville",
   "date": "2026-11-10",
   "status": "approved",
   "items": [
@@ -227,6 +238,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "014",
+  "sheetName": "Onnut",
   "date": "2026-11-08",
   "status": "replenished",
   "items": [
@@ -247,6 +259,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "013",
+  "sheetName": "Ladprao",
   "date": "2026-11-11",
   "status": "pending",
   "items": [
@@ -266,6 +279,7 @@ export const LEGACY_DOCS = [
  },
  {
   "branchId": "006",
+  "sheetName": "Ekkamai",
   "date": "2026-11-11",
   "status": "approved",
   "items": [

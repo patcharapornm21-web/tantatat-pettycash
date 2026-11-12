@@ -470,14 +470,29 @@ export async function resetBranchData(branchIds, onProgress) {
 // ------------------------------------------------------------------
 //  นำเข้าข้อมูลย้ายระบบ + แนบไฟล์ภายหลัง (เฉพาะฝ่ายบัญชี)
 // ------------------------------------------------------------------
-export const legacyDocId = (d) => `${d.branchId}_${d.date.slice(0, 7).replace("-", "")}_i${d.date.slice(8)}${d.status[0]}`;
+export const legacyDocId = (d, bid = d.branchId) => `${bid}_${d.date.slice(0, 7).replace("-", "")}_i${d.date.slice(8)}${d.status[0]}`;
+
+// รหัสสาขาตามระบบใหม่ (ใช้เมื่อหาชื่อไม่เจอ): อ่อนนุช 013 · ลาดพร้าว 016
+const CODE_FALLBACK = { onnut: "013", ladprao: "016" };
+const norm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9ก-๙]/g, "");
+
+/** จับคู่สาขาในไฟล์เดิมกับสาขาในระบบใหม่ด้วย "ชื่อ" (กันรหัสสาขาในไฟล์เดิมไม่ตรง) */
+function resolveBranch(d, sums) {
+  const want = norm(d.sheetName);
+  const hit = sums.find((b) => norm(b.name) === want) || sums.find((b) => want && (norm(b.name).includes(want) || want.includes(norm(b.name)) && norm(b.name).length > 2));
+  if (hit) return hit.id;
+  return CODE_FALLBACK[want] || d.branchId;
+}
 
 /** ตรวจว่าใบไหนนำเข้าแล้ว (ใช้ id ตายตัว จึงนำเข้าซ้ำไม่ได้) */
 export async function previewLegacy() {
+  const ss = await getDoc(summaryRef());
+  const sums = Object.values(ss.exists() ? ss.data() : {}).filter((b) => b && b.id);
   const out = [];
   for (const d of LEGACY_DOCS) {
-    const [rs, bs] = await Promise.all([getDoc(requestRef(legacyDocId(d))), getDoc(branchRef(d.branchId))]);
-    out.push({ ...d, id: legacyDocId(d), exists: rs.exists(), curStatus: rs.exists() ? rs.data().status : null, branch: bs.exists() ? bs.data() : null, total: round2(d.items.reduce((s, i) => s + i.amount, 0)) });
+    const bid = resolveBranch(d, sums), id = legacyDocId(d, bid);
+    const [rs, bs] = await Promise.all([getDoc(requestRef(id)), getDoc(branchRef(bid))]);
+    out.push({ ...d, bid, id, exists: rs.exists(), curStatus: rs.exists() ? rs.data().status : null, branch: bs.exists() ? bs.data() : null, total: round2(d.items.reduce((s, i) => s + i.amount, 0)) });
   }
   return out;
 }
@@ -495,15 +510,15 @@ export async function importLegacy(profile, onProgress = () => {}) {
     const history = [{ action: "submit", by: who, role: "branch", at: now, comment: "นำเข้าจากระบบเดิม (ให้ ROM ตรวจสอบ)" }];
     const batch = writeBatch(db);
     batch.set(requestRef(d.id), {
-      docNo: makeDocNo(b.abbr || "B" + d.branchId, ym, 1), branchId: d.branchId, branchName: b.name, region: b.region, month: ym,
+      docNo: makeDocNo(b.abbr || "B" + d.bid, ym, 1), branchId: d.bid, branchName: b.name, region: b.region, month: ym,
       date: d.date, note: "นำเข้าจากระบบเดิม", requesterUid: profile.uid, requesterName: who,
       items: d.items, total: d.total, status: "pending", history, comment: "", imported: true,
       createdAt: serverTimestamp(), updatedAt: now,
     });
     const bp = { balance: increment(-d.total), pendingAmt: increment(d.total), pendingCnt: increment(1) };
-    batch.update(branchRef(d.branchId), bp);
-    batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${d.branchId}.${k}`, v])));
-    await batch.commit(); n++; months.add(`${d.branchId}|${ym}`); onProgress(n, list.length);
+    batch.update(branchRef(d.bid), bp);
+    batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${d.bid}.${k}`, v])));
+    await batch.commit(); n++; months.add(`${d.bid}|${ym}`); onProgress(n, list.length);
   }
   for (const k of months) { const [bid, ym] = k.split("|"); await renumberBranchMonth(bid, ym); }
   return { imported: n, skipped: LEGACY_DOCS.length - n };
@@ -547,4 +562,30 @@ export async function attachReceipts(reqId, itemIndex, files, profile) {
     history: arrayUnion({ action: "attached", by: profile.name, role: "accounting", at: Date.now(), comment: `แนบไฟล์ ${files.length} ไฟล์ ที่รายการ ${itemIndex + 1}` }),
   });
   await batch.commit();
+}
+
+/**
+ * บัญชีลบใบเบิก: คืนยอดที่หักไว้ (ใบรออนุมัติ/อนุมัติแล้ว) · ลบรูปแนบ · จัดเลขที่เอกสารของสาขา+เดือนนั้นใหม่ (เลขที่ถูกลบกลับมาใช้ได้)
+ * ใบที่โอนชดเชยแล้วลบไม่ได้
+ */
+export async function deleteRequest(reqId, profile) {
+  if (profile.role !== "accounting") throw new Error("เฉพาะฝ่ายบัญชีเท่านั้นที่ลบใบเบิกได้");
+  const r = await runTransaction(db, async (tx) => {
+    const s = await tx.get(requestRef(reqId));
+    if (!s.exists()) throw new Error("ไม่พบใบเบิกนี้");
+    const r = s.data();
+    if (r.status === "replenished") throw new Error("ใบเบิกที่โอนชดเชยแล้วลบไม่ได้");
+    const bp = {};
+    if (r.status === "pending" || r.status === "approved") bp.balance = increment(r.total); // คืนยอดที่หักไว้ตอนเบิก
+    if (r.status === "pending") { bp.pendingAmt = increment(-r.total); bp.pendingCnt = increment(-1); }
+    if (Object.keys(bp).length) {
+      tx.update(branchRef(r.branchId), bp);
+      tx.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${r.branchId}.${k}`, v])));
+    }
+    (r.items || []).forEach((it, i) => receiptIds(reqId, it, i).forEach((rid) => tx.delete(doc(db, "receipts", rid))));
+    tx.delete(requestRef(reqId));
+    return r;
+  });
+  try { await renumberBranchMonth(r.branchId, r.month); } catch (e) { console.warn("renumber", e); }
+  return r;
 }
