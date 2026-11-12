@@ -477,14 +477,14 @@ export async function previewLegacy() {
   const out = [];
   for (const d of LEGACY_DOCS) {
     const [rs, bs] = await Promise.all([getDoc(requestRef(legacyDocId(d))), getDoc(branchRef(d.branchId))]);
-    out.push({ ...d, id: legacyDocId(d), exists: rs.exists(), branch: bs.exists() ? bs.data() : null, total: round2(d.items.reduce((s, i) => s + i.amount, 0)) });
+    out.push({ ...d, id: legacyDocId(d), exists: rs.exists(), curStatus: rs.exists() ? rs.data().status : null, branch: bs.exists() ? bs.data() : null, total: round2(d.items.reduce((s, i) => s + i.amount, 0)) });
   }
   return out;
 }
 
 /**
- * นำเข้าใบเบิกย้อนหลัง: approved/pending = หักยอดคงเหลือสาขา (pending เพิ่มยอดรออนุมัติ) · replenished = ไม่กระทบยอด
- * เลขที่เอกสารจัดตามวันที่ในเอกสารของแต่ละสาขา
+ * นำเข้าใบเบิกย้อนหลัง — ทุกใบเข้าเป็น "รออนุมัติ" ให้ ROM ตรวจสอบก่อน (ไม่อนุมัติให้เอง)
+ * หักยอดคงเหลือสาขาเหมือนการยื่นเบิกปกติ (ROM ปฏิเสธ/ส่งกลับ = คืนยอดอัตโนมัติ) · เลขที่เอกสารจัดตามวันที่ในเอกสาร
  */
 export async function importLegacy(profile, onProgress = () => {}) {
   const list = (await previewLegacy()).filter((d) => !d.exists && d.branch);
@@ -492,28 +492,41 @@ export async function importLegacy(profile, onProgress = () => {}) {
   for (const d of list) {
     const b = d.branch, ym = d.date.slice(0, 7), now = Date.now();
     const who = d.items[0].requester || "สาขา";
-    const history = [{ action: "submit", by: who, role: "branch", at: now, comment: "นำเข้าจากระบบเดิม" }];
-    if (d.status !== "pending") history.push({ action: "approved", by: "นำเข้าจากระบบเดิม", role: "accounting", at: now, comment: "" });
-    if (d.status === "replenished") history.push({ action: "replenished", by: "นำเข้าจากระบบเดิม", role: "accounting", at: now, comment: "โอนชดเชยแล้ว (ระบบเดิม)" });
+    const history = [{ action: "submit", by: who, role: "branch", at: now, comment: "นำเข้าจากระบบเดิม (ให้ ROM ตรวจสอบ)" }];
     const batch = writeBatch(db);
     batch.set(requestRef(d.id), {
       docNo: makeDocNo(b.abbr || "B" + d.branchId, ym, 1), branchId: d.branchId, branchName: b.name, region: b.region, month: ym,
       date: d.date, note: "นำเข้าจากระบบเดิม", requesterUid: profile.uid, requesterName: who,
-      items: d.items, total: d.total, status: d.status, history, comment: "", imported: true,
+      items: d.items, total: d.total, status: "pending", history, comment: "", imported: true,
       createdAt: serverTimestamp(), updatedAt: now,
-      ...(d.status !== "pending" ? { decidedByName: "นำเข้าจากระบบเดิม", decidedAt: now } : {}),
-      ...(d.status === "replenished" ? { replenishedAt: now } : {}),
     });
-    if (d.status !== "replenished") {
-      const bp = { balance: increment(-d.total) };
-      if (d.status === "pending") { bp.pendingAmt = increment(d.total); bp.pendingCnt = increment(1); }
-      batch.update(branchRef(d.branchId), bp);
-      batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${d.branchId}.${k}`, v])));
-    }
+    const bp = { balance: increment(-d.total), pendingAmt: increment(d.total), pendingCnt: increment(1) };
+    batch.update(branchRef(d.branchId), bp);
+    batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${d.branchId}.${k}`, v])));
     await batch.commit(); n++; months.add(`${d.branchId}|${ym}`); onProgress(n, list.length);
   }
   for (const k of months) { const [bid, ym] = k.split("|"); await renumberBranchMonth(bid, ym); }
   return { imported: n, skipped: LEGACY_DOCS.length - n };
+}
+
+/** ใบที่เคยนำเข้าเป็น "อนุมัติแล้ว/โอนชดเชยแล้ว" → ตั้งกลับเป็น "รออนุมัติ" ให้ ROM ตรวจ (ปรับยอดสาขาให้ตรง) */
+export async function resetImportedToPending(profile, onProgress = () => {}) {
+  const s = await getDocs(query(collection(db, "requests"), where("imported", "==", true), limit(300)));
+  const rows = s.docs.map((x) => ({ id: x.id, ...x.data() })).filter((r) => r.status === "approved" || r.status === "replenished");
+  let n = 0;
+  for (const r of rows) {
+    const now = Date.now(), batch = writeBatch(db);
+    batch.update(requestRef(r.id), {
+      status: "pending", comment: "", decidedByName: "", decidedAt: null, replenishedAt: null, updatedAt: now,
+      history: arrayUnion({ action: "edited", by: profile.name, role: "accounting", at: now, comment: "ตั้งกลับเป็นรออนุมัติ ให้ ROM ตรวจสอบข้อมูลนำเข้า" }),
+    });
+    const bp = { pendingAmt: increment(r.total), pendingCnt: increment(1) };
+    if (r.status === "replenished") bp.balance = increment(-r.total); // เดิมไม่ได้หักยอด → หักตอนนี้
+    batch.update(branchRef(r.branchId), bp);
+    batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${r.branchId}.${k}`, v])));
+    await batch.commit(); n++; onProgress(n, rows.length);
+  }
+  return { fixed: n };
 }
 
 /** บัญชีแนบรูป/PDF เพิ่มให้รายการของใบเบิก (ไม่ต้องส่งอนุมัติใหม่) files = [{data, kind, name}] */

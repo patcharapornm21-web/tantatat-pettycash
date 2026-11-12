@@ -1,7 +1,7 @@
 // Central Accounting Console — ภาพรวม 100 สาขาจาก Summary Document (อ่านแค่ 1 เอกสาร) + Real-time
 import { esc, baht, money, thDate, statusChip, debounce, branchLabel, isOpen, $, $$, round2 } from "../utils.js";
 import { pageHeader, toast, openModal, busy, friendlyError, isSoundOn, setSound, beep, confirmDialog } from "../ui.js";
-import { previewLegacy, importLegacy, renumberBranchMonth, resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
+import { previewLegacy, importLegacy, resetImportedToPending, renumberBranchMonth, resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
 import { openReplenishModal } from "./replenish.js";
 import { APP_SETTINGS } from "../firebase-config.js";
 import { bus } from "../app.js";
@@ -241,15 +241,20 @@ export default async function view(root, ctx) {
     let list = [];
     try { list = await previewLegacy(); } catch (e) { console.error(e); q2("#im-b").textContent = friendlyError(e); return; }
     const todo = list.filter((d) => !d.exists && d.branch), done = list.filter((d) => d.exists), miss = list.filter((d) => !d.exists && !d.branch);
-    const ST = { approved: "อนุมัติแล้ว (รอโอนชดเชย)", replenished: "โอนชดเชยแล้ว", pending: "รออนุมัติ" };
+    const ST = { approved: "อนุมัติแล้ว", replenished: "โอนชดเชยแล้ว", pending: "รออนุมัติ", cancelled: "ยกเลิก", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข" };
+    const fix = done.filter((d) => d.curStatus === "approved" || d.curStatus === "replenished");
     const sum = todo.reduce((a, d) => a + d.total, 0);
     q2(".modal-body").innerHTML = `<h3 class="modal-title">นำเข้าข้อมูลย้ายระบบ (พ.ย. 2569)</h3>
-      <div class="notice info"><span class="material-symbols-outlined">info</span><div class="small">นำเข้าใบเบิกของสาขาที่ยังไม่ได้บันทึก (ไม่รวมบางแสน/ศรีราชา และรายการเติมเงิน HQ) · 1 ใบเบิก = 1 สาขา/1 วัน · <b>อนุมัติแล้ว/รออนุมัติ จะหักยอดคงเหลือสาขา</b> ส่วน “โอนชดเชยแล้ว” ไม่กระทบยอด · รูปใบเสร็จให้แนบทีหลังในหน้าใบเบิก (มีลิงก์ Drive เดิมให้เปิดดู) · นำเข้าซ้ำไม่ได้ ระบบข้ามใบที่นำเข้าแล้ว</div></div>
+      <div class="notice info"><span class="material-symbols-outlined">info</span><div class="small">นำเข้าใบเบิกของสาขาที่ยังไม่ได้บันทึก (ไม่รวมบางแสน/ศรีราชา และรายการเติมเงิน HQ) · 1 ใบเบิก = 1 สาขา/1 วัน · <b>ทุกใบเข้าเป็น “รออนุมัติ” ให้ ROM ตรวจสอบเอง</b> (หักยอดคงเหลือสาขาเหมือนยื่นเบิกปกติ ถ้า ROM ปฏิเสธ/ส่งกลับ ระบบคืนยอดให้) · รูปใบเสร็จให้แนบทีหลังในหน้าใบเบิก (มีลิงก์ Drive เดิมให้เปิดดู) · นำเข้าซ้ำไม่ได้ ระบบข้ามใบที่นำเข้าแล้ว</div></div>
       <div class="tbl-wrap" style="max-height:320px;overflow:auto;margin:.75rem 0"><table class="tbl"><thead><tr><th>สาขา</th><th>วันที่</th><th class="c">รายการ</th><th class="r">ยอด</th><th>สถานะ</th><th></th></tr></thead><tbody>
-      ${list.map((d) => `<tr><td>${esc(d.branch ? branchLabel({ id: d.branchId, name: d.branch.name }) : d.branchId)}</td><td>${thDate(d.date)}</td><td class="c">${d.items.length}</td><td class="r num">${money(d.total)}</td><td class="small">${ST[d.status]}</td><td class="small">${d.exists ? "นำเข้าแล้ว" : d.branch ? "" : "ไม่พบสาขา"}</td></tr>`).join("")}</tbody></table></div>
+      ${list.map((d) => `<tr><td>${esc(d.branch ? branchLabel({ id: d.branchId, name: d.branch.name }) : d.branchId)}</td><td>${thDate(d.date)}</td><td class="c">${d.items.length}</td><td class="r num">${money(d.total)}</td><td class="small">${d.exists ? ST[d.curStatus] || d.curStatus : "รออนุมัติ"}</td><td class="small">${d.exists ? "นำเข้าแล้ว" : d.branch ? "" : "ไม่พบสาขา"}</td></tr>`).join("")}</tbody></table></div>
       <div class="small">จะนำเข้า <b>${todo.length}</b> ใบ รวม <b>${baht(sum)}</b>${done.length ? ` · ข้าม ${done.length} (นำเข้าแล้ว)` : ""}${miss.length ? ` · <span style="color:var(--bad)">ไม่พบสาขา ${miss.length} ใบ (ต้อง Seed สาขาก่อน)</span>` : ""}</div>
       <div class="small muted" id="im-pg"></div>
-      <div class="modal-foot" style="margin-top:1rem"><button class="btn ghost" data-close>ปิด</button><button class="btn ok" id="im-go" ${todo.length ? "" : "disabled"}><span class="material-symbols-outlined">move_up</span>นำเข้า ${todo.length} ใบ</button></div>`;
+      <div class="modal-foot" style="margin-top:1rem"><button class="btn ghost" data-close>ปิด</button>${fix.length ? `<button class="btn warn" id="im-fix"><span class="material-symbols-outlined">undo</span>ตั้ง ${fix.length} ใบที่อนุมัติไปแล้ว กลับเป็นรออนุมัติ</button>` : ""}<button class="btn ok" id="im-go" ${todo.length ? "" : "disabled"}><span class="material-symbols-outlined">move_up</span>นำเข้า ${todo.length} ใบ</button></div>`;
+    if (q2("#im-fix")) q2("#im-fix").onclick = async () => {
+      try { const r = await busy(() => resetImportedToPending(ctx.profile, (n, t) => { q2("#im-pg").textContent = `กำลังปรับ ${n}/${t}…`; }), "กำลังปรับสถานะ…"); toast(`ตั้งกลับเป็นรออนุมัติ ${r.fixed} ใบ`, "ok", 6000); m.close(); }
+      catch (e) { console.error(e); toast(friendlyError(e), "err", 9000); }
+    };
     q2("#im-go").onclick = async () => {
       try {
         const r = await busy(() => importLegacy(ctx.profile, (n, t) => { q2("#im-pg").textContent = `กำลังนำเข้า ${n}/${t}…`; }), "กำลังนำเข้า…");
