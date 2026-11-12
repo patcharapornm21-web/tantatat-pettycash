@@ -289,7 +289,7 @@ export async function cancelRequest(reqId, reason, profile) {
 }
 
 /** อนุมัติ / ปฏิเสธ / ตีกลับ — ตรวจสถานะซ้ำใน Transaction กันกดชนกัน */
-export async function decideRequest(reqId, action, comment, profile) {
+export async function decideRequest(reqId, action, comment, profile, itemReview) {
   if (!["approved", "rejected", "returned"].includes(action)) throw new Error("action ไม่ถูกต้อง");
   if (action !== "approved" && !comment?.trim()) throw new Error("กรุณาระบุเหตุผลเมื่อปฏิเสธหรือส่งกลับแก้ไข");
   return runTransaction(db, async (tx) => {
@@ -302,6 +302,7 @@ export async function decideRequest(reqId, action, comment, profile) {
       status: action, history, comment: comment || "", decidedBy: profile.uid, decidedByName: profile.name,
       decidedAt: Date.now(), updatedAt: Date.now(),
       ...(action === "approved" ? { approverSig: profile.signature || "", approverName: profile.name } : {}),
+      ...(itemReview ? { itemReview } : {}),
     });
     const dBal = action === "approved" ? 0 : r.total; // อนุมัติ: ยอดหักไปแล้วตอนเบิก / ปฏิเสธ-ตีกลับ: คืนยอด
     const bp = { pendingAmt: increment(-r.total), pendingCnt: increment(-1) };
@@ -310,6 +311,23 @@ export async function decideRequest(reqId, action, comment, profile) {
     tx.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${r.branchId}.${k}`, v])));
     return r;
   });
+}
+
+/**
+ * พิจารณาทีละรายการ — marks: [{s:'approved'|'returned'|'rejected', note}] เรียงตาม items
+ * ทุกรายการอนุมัติ → อนุมัติใบ · ทุกรายการปฏิเสธ → ปฏิเสธใบ · อย่างอื่น → ส่งกลับแก้ไขทั้งใบ (คืนยอด)
+ */
+export async function decideItems(reqId, marks, overall, profile) {
+  const s = await getDoc(requestRef(reqId));
+  if (!s.exists()) throw new Error("ไม่พบใบเบิกนี้");
+  const n = (s.data().items || []).length;
+  if (!Array.isArray(marks) || marks.length !== n || marks.some((m) => !m || !["approved", "returned", "rejected"].includes(m.s))) throw new Error("กรุณาเลือกผลการพิจารณาให้ครบทุกรายการ");
+  if (marks.some((m) => m.s !== "approved" && !(m.note || "").trim())) throw new Error("ต้องระบุเหตุผลทุกรายการที่ส่งกลับหรือปฏิเสธ");
+  const action = marks.every((m) => m.s === "approved") ? "approved" : marks.every((m) => m.s === "rejected") ? "rejected" : "returned";
+  const review = Object.fromEntries(marks.map((m, i) => [String(i), { s: m.s, note: (m.note || "").trim() }]));
+  const lines = marks.map((m, i) => (m.s === "approved" ? "" : `รายการที่ ${i + 1} ${m.s === "rejected" ? "ปฏิเสธ" : "แก้ไข"}: ${m.note.trim()}`)).filter(Boolean);
+  const comment = [(overall || "").trim(), ...lines].filter(Boolean).join(" | ");
+  return decideRequest(reqId, action, comment, profile, review);
 }
 
 // ------------------------------------------------------------------

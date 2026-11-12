@@ -1,4 +1,4 @@
-import { branchLabel, isOpen, esc, baht, money, thDate, thMonth, lastMonths, curMonth, statusChip, STATUS, debounce, $, $$ } from "../utils.js";
+import { branchLabel, isOpen, esc, baht, money, thDate, dateRange, thMonth, lastMonths, curMonth, statusChip, STATUS, debounce, $, $$ } from "../utils.js";
 import { pageHeader, toast, friendlyError } from "../ui.js";
 import { queryRequests } from "../data.js";
 
@@ -32,9 +32,9 @@ export default async function view(root, ctx) {
     $("#info").textContent = st.loading ? "กำลังโหลด…" : `แสดง ${rows.length} จาก ${st.rows.length} รายการ`;
     $("#out").innerHTML = st.loading ? `<div class="empty"><div class="spin" style="margin:0 auto 1rem"></div>กำลังโหลด…</div>` : rows.length ? `
       <div class="tbl-wrap mob-hide"><table class="tbl"><thead><tr><th>เลขที่เอกสาร</th><th>วันที่</th>${role !== "branch" ? "<th>สาขา</th>" : ""}<th>ผู้ขอเบิก</th><th class="c">รายการ</th><th class="r">ยอดรวม</th><th>สถานะ</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr class="click" data-id="${r.id}"><td><b>${esc(r.docNo)}</b></td><td>${thDate(r.date)}</td>${role !== "branch" ? `<td>${esc(r.branchName)}</td>` : ""}<td>${esc(r.requesterName)}</td><td class="c">${r.items?.length || 0}</td><td class="r num"><b>${money(r.total)}</b></td><td>${statusChip(r.status)}</td></tr>`).join("")}</tbody></table></div>
+      ${rows.map((r) => `<tr class="click" data-id="${r.id}"><td><b>${esc(r.docNo)}</b></td><td>${dateRange(r)}</td>${role !== "branch" ? `<td>${esc(r.branchName)}</td>` : ""}<td>${esc(r.requesterName)}</td><td class="c">${r.items?.length || 0}</td><td class="r num"><b>${money(r.total)}</b></td><td>${statusChip(r.status)}</td></tr>`).join("")}</tbody></table></div>
       <div class="reqcards" style="padding:1rem">${rows.map((r) => `<div class="reqcard" data-id="${r.id}"><div class="row between"><b>${esc(r.docNo)}</b>${statusChip(r.status)}</div>
-        <div class="small muted">${role !== "branch" ? esc(r.branchName) + " · " : ""}${thDate(r.date)}</div><b class="num" style="font-size:16px">${baht(r.total)}</b></div>`).join("")}</div>`
+        <div class="small muted">${role !== "branch" ? esc(r.branchName) + " · " : ""}${dateRange(r)}</div><b class="num" style="font-size:16px">${baht(r.total)}</b></div>`).join("")}</div>`
       : `<div class="empty"><span class="material-symbols-outlined">search_off</span>ไม่พบใบเบิก</div>`;
     $$("[data-id]", root).forEach((el) => (el.onclick = () => ctx.nav(`#/request/${el.dataset.id}`)));
   };

@@ -26,6 +26,13 @@ export const thDate = (iso) => {
   const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
   return `${d}/${pad(m)}/${y + 543}`;
 };
+/** ช่วงวันที่ของรายการในใบเบิก: วันเดียว → "1/11/2569", หลายวัน → "1/11/2569 - 9/11/2569" */
+export const dateRange = (r) => {
+  const ds = (r.items || []).map((i) => i.date).filter(Boolean).sort();
+  if (!ds.length) return thDate(r.date);
+  const a = ds[0], b = ds[ds.length - 1];
+  return a === b ? thDate(a) : `${thDate(a)} - ${thDate(b)}`;
+};
 export const thDateTime = (ms) => {
   if (!ms) return "-";
   const d = new Date(ms);

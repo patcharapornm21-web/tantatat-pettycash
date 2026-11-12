@@ -1,4 +1,4 @@
-import { esc, baht, money, thDate, branchLabel, isOpen, $, $$, statusChip } from "../utils.js";
+import { esc, baht, money, thDate, dateRange, branchLabel, isOpen, $, $$, statusChip } from "../utils.js";
 import { pageHeader } from "../ui.js";
 import { bus } from "../app.js";
 import { APP_SETTINGS } from "../firebase-config.js";
@@ -17,7 +17,7 @@ export default async function view(root, ctx) {
     <div class="card flat" style="margin-bottom:1.25rem">
       <div class="card-h" style="padding:1.25rem 1.5rem 0"><h3>ใบเบิกที่ต้องพิจารณา</h3></div>
       ${P.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>เลขที่เอกสาร</th><th>สาขา</th><th>ผู้ขอเบิก</th><th>วันที่</th><th class="c">รายการ</th><th class="r">ยอดรวม</th><th></th></tr></thead><tbody>
-      ${P.map((r) => `<tr class="click" data-id="${r.id}"><td><b>${esc(r.docNo)}</b></td><td>${esc(r.branchName)}</td><td>${esc(r.requesterName)}</td><td>${thDate(r.date)}</td><td class="c">${r.items?.length || 0}</td><td class="r num"><b>${money(r.total)}</b></td><td class="r"><span class="btn soft sm">ตรวจสอบ</span></td></tr>`).join("")}</tbody></table></div>`
+      ${P.map((r) => `<tr class="click" data-id="${r.id}"><td><b>${esc(r.docNo)}</b></td><td>${esc(r.branchName)}</td><td>${esc(r.requesterName)}</td><td>${dateRange(r)}</td><td class="c">${r.items?.length || 0}</td><td class="r num"><b>${money(r.total)}</b></td><td class="r"><span class="btn soft sm">ตรวจสอบ</span></td></tr>`).join("")}</tbody></table></div>`
       : `<div class="empty"><span class="material-symbols-outlined">task_alt</span>ไม่มีใบเบิกค้างอนุมัติ 🎉</div>`}
     </div>
     <div class="card flat"><div class="card-h" style="padding:1.25rem 1.5rem 0"><h3>เงินสดย่อยสาขาที่ดูแล</h3></div>

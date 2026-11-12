@@ -1,5 +1,5 @@
-import { esc, baht, money, thDate, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
-import { subRequest, loadReceipts, decideRequest, cancelRequest } from "../data.js";
+import { esc, baht, money, thDate, dateRange, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
+import { subRequest, loadReceipts, decideRequest, decideItems, cancelRequest } from "../data.js";
 import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
 import { viewFile, thumbCell } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
@@ -12,12 +12,17 @@ export default async function view(root, ctx, { params }) {
   const id = params[0];
   let req = null, receipts = {}, rcKey = "";
   let first = true;
+  const sel = new Set();   // แถวที่ ROM ติ๊กเลือก
+  let marks = {};          // ผลพิจารณาที่ทำเครื่องหมายไว้ (ยังไม่บันทึก) { index: {s, note} }
+  let cmtDraft = "";
+  const MARK = { approved: ["อนุมัติ", "st-approved"], returned: ["ส่งกลับแก้ไข", "st-returned"], rejected: ["ปฏิเสธ", "st-rejected"] };
 
   const canDecide = () => req && req.status === "pending" && (ctx.role === "accounting" || (ctx.role === "approver" && req.region === ctx.profile.region));
 
   const draw = () => {
     if (!req) { root.innerHTML = first ? `<div class="empty"><div class="spin" style="margin:0 auto 1rem"></div>กำลังโหลด…</div>` : `<div class="notice bad"><span class="material-symbols-outlined">error</span><div>ไม่พบใบเบิก หรือถูกลบแล้ว</div></div>`; return; }
     const r = req; const st = r.status;
+    const decide = canDecide(); const showRev = decide || (r.itemReview && Object.keys(r.itemReview).length);
     const back = ctx.role === "branch" ? "#/overview" : "#/overview";
     const mine = ctx.role === "branch" && r.branchId === ctx.profile.branchId;
     const s2 = st === "pending" ? "cur" : (st === "rejected" || st === "cancelled") ? "bad" : st === "returned" ? "rev" : "done";
@@ -40,20 +45,20 @@ export default async function view(root, ctx, { params }) {
           <div class="grid g3 keep" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));font-size:13px">
             <div><div class="small muted">สาขา</div><b>${esc(r.branchName)}</b> <span class="tag">${esc(r.branchId)}</span></div>
             <div><div class="small muted">ผู้ขอเบิก</div><b>${esc(r.requesterName)}</b></div>
-            <div><div class="small muted">วันที่ขอเบิก</div><b>${thDate(r.date)}</b></div>
+            <div><div class="small muted">วันที่ขอเบิก</div><b>${dateRange(r)}</b></div>
           </div>
           ${r.note ? `<div style="margin-top:1rem" class="small"><span class="muted">หมายเหตุ:</span> ${esc(r.note)}</div>` : ""}
         </div>
 
         <div class="card flat">
           <div class="card-h" style="padding:1.25rem 1.5rem 0"><h3>รายการค่าใช้จ่าย (${r.items.length})</h3></div>
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>วันที่</th><th>รายการ</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">หลักฐาน</th></tr></thead><tbody>
-          ${r.items.map((it, i) => `<tr><td>${i + 1}</td><td>${thDate(it.date || r.date)}</td>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr>${decide ? `<th class="c" style="width:34px"><input type="checkbox" id="sel-all" aria-label="เลือกทั้งหมด" ${sel.size === r.items.length && r.items.length ? "checked" : ""}></th>` : ""}<th>#</th><th>วันที่</th><th>รายการ</th><th>Supplier / ผู้รับเงิน</th><th>รูปแบบเอกสาร</th><th>หมวดหมู่</th><th>ผู้ขอเบิก</th><th class="r">จำนวนเงิน</th><th class="c">หลักฐาน</th>${showRev ? `<th>ผลพิจารณา</th>` : ""}</tr></thead><tbody>
+          ${r.items.map((it, i) => { const rv = decide ? marks[i] : (r.itemReview || {})[i]; return `<tr${decide && sel.has(i) ? ' style="background:var(--accent-soft,#e0f2fe)"' : ""}>${decide ? `<td class="c"><input type="checkbox" data-sel="${i}" ${sel.has(i) ? "checked" : ""} aria-label="เลือกรายการ ${i + 1}"></td>` : ""}<td>${i + 1}</td><td>${thDate(it.date || r.date)}</td>
             <td>${esc(it.desc || "-")}</td><td><b>${esc(it.supplier || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}% · ก่อนหัก ${money(it.wht.before)} · หัก ${money(it.wht.amount)}</span></div>` : ""}</td>
             <td class="small">${esc(it.docType || "-")}</td><td><span class="cat-chip">${esc(it.category)}</span></td><td>${esc(it.requester || r.requesterName || "")}</td>
             <td class="r num"><b>${money(it.amount)}</b></td>
-            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>` : receipts[i] ? thumbCell(receipts[i], i) : `<span class="small muted">กำลังโหลด…</span>`}</td></tr>`).join("")}
-          </tbody><tfoot><tr><td colspan="7" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td></tr></tfoot></table></div>
+            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>` : receipts[i] ? thumbCell(receipts[i], i) : `<span class="small muted">กำลังโหลด…</span>`}</td>${showRev ? `<td>${rv ? `<span class="chip ${MARK[rv.s][1]}">${MARK[rv.s][0]}</span>${rv.note ? `<div class="tiny muted">${esc(rv.note)}</div>` : ""}` : `<span class="tiny muted">${decide ? "ยังไม่ได้เลือก" : ""}</span>`}</td>` : ""}</tr>`; }).join("")}
+          </tbody><tfoot><tr><td colspan="${7 + (decide ? 1 : 0)}" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td>${showRev ? "<td></td>" : ""}</tr></tfoot></table></div>
         </div>
 
         ${r.requesterSig || r.approverSig ? `<div class="card"><h3 style="margin-bottom:1rem">ลายเซ็น</h3><div class="row wrap" style="gap:2rem;align-items:flex-end">
@@ -76,13 +81,15 @@ export default async function view(root, ctx, { params }) {
           </div>
         </div>
 
-        ${canDecide() ? `<div class="card no-print">
-          <h3 style="margin-bottom:.25rem">การพิจารณา</h3><p class="small muted" style="margin:0 0 1rem">ตรวจสอบรายการและรูปใบเสร็จก่อนตัดสินใจ</p>
-          <div class="field"><label for="cmt">ความเห็น (จำเป็นเมื่อปฏิเสธ/ส่งกลับ)</label><textarea class="inp" id="cmt" placeholder="ระบุเหตุผล…"></textarea></div>
+        ${decide ? `<div class="card no-print">
+          <h3 style="margin-bottom:.25rem">การพิจารณา</h3><p class="small muted" style="margin:0 0 .75rem">ตรวจสอบรายการและรูปใบเสร็จก่อนตัดสินใจ</p>
+          <div class="notice info" style="margin-bottom:1rem"><span class="material-symbols-outlined">checklist</span><div class="small"><b>พิจารณาทีละรายการได้</b><br>ติ๊กรายการในตาราง (หรือติ๊กหัวตารางเพื่อเลือกทั้งหมด) แล้วกดปุ่มด้านล่าง · ถ้าไม่ติ๊กรายการใดเลย ปุ่มจะมีผลกับทั้งใบ</div></div>
+          <div class="row between small" style="margin-bottom:.5rem"><span>เลือกอยู่ <b>${sel.size}</b> / ${r.items.length} รายการ</span><span class="muted">ตัดสินแล้ว ${Object.keys(marks).length} รายการ${Object.keys(marks).length ? ` · <a href="#" id="clr">ล้างผล</a>` : ""}</span></div>
+          <div class="field"><label for="cmt">ความเห็น (จำเป็นเมื่อปฏิเสธ/ส่งกลับ)</label><textarea class="inp" id="cmt" placeholder="ระบุเหตุผล…">${esc(cmtDraft)}</textarea></div>
           <div class="decide" style="margin-top:1rem">
-            <button class="btn ok block" id="ap" style="min-height:48px"><span class="material-symbols-outlined">verified</span>อนุมัติเอกสาร</button>
-            <button class="btn warn block" id="rt"><span class="material-symbols-outlined">undo</span>ส่งกลับแก้ไข</button>
-            <button class="btn ghost block" id="rj" style="color:var(--bad)"><span class="material-symbols-outlined">cancel</span>ปฏิเสธคำขอ</button>
+            <button class="btn ok block" id="ap" style="min-height:48px"><span class="material-symbols-outlined">verified</span>${sel.size ? "อนุมัติรายการที่เลือก" : "อนุมัติเอกสาร"}</button>
+            <button class="btn warn block" id="rt"><span class="material-symbols-outlined">undo</span>${sel.size ? "ส่งกลับแก้ไขรายการที่เลือก" : "ส่งกลับแก้ไข"}</button>
+            <button class="btn ghost block" id="rj" style="color:var(--bad)"><span class="material-symbols-outlined">cancel</span>${sel.size ? "ปฏิเสธรายการที่เลือก" : "ปฏิเสธคำขอ"}</button>
           </div></div>` : ""}
 
         ${r.comment && st !== "pending" ? `<div class="notice ${st === "approved" || st === "replenished" ? "info" : (st === "rejected" || st === "cancelled") ? "bad" : "warn"}"><span class="material-symbols-outlined">chat</span><div><b>${st === "cancelled" ? "เหตุผลที่ยกเลิก" : `ความเห็นผู้พิจารณา (${esc(r.decidedByName || "")})`}</b><br>${esc(r.comment)}</div></div>` : ""}
@@ -116,13 +123,44 @@ export default async function view(root, ctx, { params }) {
     };
     const rp = $("#repl");
     if (rp) rp.onclick = () => { const b = ctx.summary && ctx.summary[req.branchId]; if (b) openReplenishModal(ctx, b); else toast("ยังไม่พบข้อมูลสาขาใน Summary", "warn"); };
+    const cmt = $("#cmt"); if (cmt) cmt.oninput = () => (cmtDraft = cmt.value);
+    const sa = $("#sel-all"); if (sa) sa.onchange = () => { sel.clear(); if (sa.checked) req.items.forEach((_, i) => sel.add(i)); draw(); };
+    $$("[data-sel]").forEach((c) => (c.onchange = () => { c.checked ? sel.add(+c.dataset.sel) : sel.delete(+c.dataset.sel); draw(); }));
+    const clr = $("#clr"); if (clr) clr.onclick = (e) => { e.preventDefault(); marks = {}; sel.clear(); draw(); };
+
+    const finalize = async (m, overall) => {
+      const n = req.items.length; const cnt = { approved: 0, returned: 0, rejected: 0 };
+      for (let i = 0; i < n; i++) cnt[m[i].s]++;
+      const outcome = cnt.approved === n ? "approved" : cnt.rejected === n ? "rejected" : "returned";
+      if (outcome === "approved" && !(await ensureSignature(ctx))) return toast("ต้องมีลายเซ็นก่อนอนุมัติ", "warn");
+      const sum = `อนุมัติ ${cnt.approved} · ส่งกลับแก้ไข ${cnt.returned} · ปฏิเสธ ${cnt.rejected}`;
+      const msg = outcome === "approved" ? `อนุมัติ ${req.docNo} ทั้ง ${n} รายการ ยอด ${baht(req.total)}?`
+        : outcome === "rejected" ? `ปฏิเสธ ${req.docNo} ทั้ง ${n} รายการ?`
+        : `ผลพิจารณา: ${sum}\nใบเบิกจะถูกส่งกลับให้สาขาแก้ไขทั้งใบ และคืนยอดเข้าสาขา ยืนยัน?`;
+      if (!(await confirmDialog(msg, { okText: outcome === "approved" ? "อนุมัติ" : outcome === "rejected" ? "ปฏิเสธ" : "ส่งกลับแก้ไข", danger: outcome !== "approved" }))) return;
+      try {
+        await busy(() => decideItems(req.id, m, overall, ctx.profile));
+        sel.clear(); marks = {}; cmtDraft = "";
+        toast(`${esc(req.docNo)}: ${outcome === "approved" ? "อนุมัติเรียบร้อย" : outcome === "rejected" ? "ปฏิเสธเรียบร้อย" : "ส่งกลับแก้ไขเรียบร้อย"}`, outcome === "approved" ? "ok" : "info");
+      } catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
+    };
+
     const act = (action, label, danger) => async () => {
-      const comment = $("#cmt").value.trim();
+      const comment = $("#cmt").value.trim(); cmtDraft = comment;
       if (action !== "approved" && !comment) { $("#cmt").classList.add("err"); $("#cmt").focus(); return toast("กรุณาระบุเหตุผล", "warn"); }
+      if (sel.size) { // ทำเครื่องหมายเฉพาะรายการที่ติ๊ก
+        sel.forEach((i) => (marks[i] = { s: action, note: action === "approved" ? "" : comment }));
+        sel.clear(); if (action !== "approved") cmtDraft = "";
+        if (Object.keys(marks).length === req.items.length) { draw(); return finalize(req.items.map((_, i) => marks[i]), ""); }
+        toast(`ทำเครื่องหมาย “${label}” แล้ว เหลืออีก ${req.items.length - Object.keys(marks).length} รายการที่ยังไม่ได้เลือก`, "info");
+        return draw();
+      }
+      if (Object.keys(marks).length) return toast("มีรายการที่ทำเครื่องหมายไว้แล้ว ให้ติ๊กรายการที่เหลือ หรือกด “ล้างผล” ก่อนจึงจะทำทั้งใบได้", "warn", 6000);
       if (action === "approved" && !(await ensureSignature(ctx))) return toast("ต้องมีลายเซ็นก่อนอนุมัติ", "warn");
       if (!(await confirmDialog(`${label} ${req.docNo} ยอด ${baht(req.total)}?`, { okText: label, danger }))) return;
       try {
         await busy(() => decideRequest(req.id, action, comment, ctx.profile));
+        cmtDraft = "";
         toast(`${label} ${esc(req.docNo)} เรียบร้อย`, action === "approved" ? "ok" : "info");
       } catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
     };
