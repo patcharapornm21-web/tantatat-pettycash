@@ -1,7 +1,7 @@
 // Central Accounting Console — ภาพรวม 100 สาขาจาก Summary Document (อ่านแค่ 1 เอกสาร) + Real-time
 import { esc, baht, money, thDate, statusChip, debounce, branchLabel, isOpen, $, $$, round2 } from "../utils.js";
 import { pageHeader, toast, openModal, busy, friendlyError, isSoundOn, setSound, beep, confirmDialog } from "../ui.js";
-import { renumberBranchMonth, resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
+import { previewLegacy, importLegacy, renumberBranchMonth, resetBranchData, seedBranches, updateBranchInfo, setBranchesOpen, saveSettings, subLatest, listUsers } from "../data.js";
 import { openReplenishModal } from "./replenish.js";
 import { APP_SETTINGS } from "../firebase-config.js";
 import { bus } from "../app.js";
@@ -19,6 +19,7 @@ export default async function view(root, ctx) {
     title: "Central Accounting Console",
     crumb: "บัญชีส่วนกลาง › ภาพรวมทุกสาขา",
     actions: `<button class="btn ghost" id="snd"><span class="material-symbols-outlined">${isSoundOn() ? "volume_up" : "volume_off"}</span><span id="sndt">${isSoundOn() ? "เสียง: เปิด" : "เสียง: ปิด"}</span></button>
+      <button class="btn ghost" id="imp"><span class="material-symbols-outlined">move_up</span>นำเข้าข้อมูลย้ายระบบ</button>
       <button class="btn ghost" id="rst" style="color:var(--bad)"><span class="material-symbols-outlined">delete_sweep</span>ล้างข้อมูลทดสอบ</button>
       <button class="btn ghost" id="cfg"><span class="material-symbols-outlined">tune</span>ตั้งค่าระบบ</button>
       <button class="btn ghost" id="opn"><span class="material-symbols-outlined">toggle_on</span>เปิด/ปิดสาขา</button>
@@ -234,7 +235,31 @@ export default async function view(root, ctx) {
     };
   }
 
+  async function openImport() {
+    const m = openModal(`<div class="modal-body"><h3 class="modal-title">นำเข้าข้อมูลย้ายระบบ (พ.ย. 2569)</h3><div class="muted small" id="im-b">กำลังตรวจข้อมูล…</div></div>`);
+    const q2 = (x) => m.el.querySelector(x);
+    let list = [];
+    try { list = await previewLegacy(); } catch (e) { console.error(e); q2("#im-b").textContent = friendlyError(e); return; }
+    const todo = list.filter((d) => !d.exists && d.branch), done = list.filter((d) => d.exists), miss = list.filter((d) => !d.exists && !d.branch);
+    const ST = { approved: "อนุมัติแล้ว (รอโอนชดเชย)", replenished: "โอนชดเชยแล้ว", pending: "รออนุมัติ" };
+    const sum = todo.reduce((a, d) => a + d.total, 0);
+    q2(".modal-body").innerHTML = `<h3 class="modal-title">นำเข้าข้อมูลย้ายระบบ (พ.ย. 2569)</h3>
+      <div class="notice info"><span class="material-symbols-outlined">info</span><div class="small">นำเข้าใบเบิกของสาขาที่ยังไม่ได้บันทึก (ไม่รวมบางแสน/ศรีราชา และรายการเติมเงิน HQ) · 1 ใบเบิก = 1 สาขา/1 วัน · <b>อนุมัติแล้ว/รออนุมัติ จะหักยอดคงเหลือสาขา</b> ส่วน “โอนชดเชยแล้ว” ไม่กระทบยอด · รูปใบเสร็จให้แนบทีหลังในหน้าใบเบิก (มีลิงก์ Drive เดิมให้เปิดดู) · นำเข้าซ้ำไม่ได้ ระบบข้ามใบที่นำเข้าแล้ว</div></div>
+      <div class="tbl-wrap" style="max-height:320px;overflow:auto;margin:.75rem 0"><table class="tbl"><thead><tr><th>สาขา</th><th>วันที่</th><th class="c">รายการ</th><th class="r">ยอด</th><th>สถานะ</th><th></th></tr></thead><tbody>
+      ${list.map((d) => `<tr><td>${esc(d.branch ? branchLabel({ id: d.branchId, name: d.branch.name }) : d.branchId)}</td><td>${thDate(d.date)}</td><td class="c">${d.items.length}</td><td class="r num">${money(d.total)}</td><td class="small">${ST[d.status]}</td><td class="small">${d.exists ? "นำเข้าแล้ว" : d.branch ? "" : "ไม่พบสาขา"}</td></tr>`).join("")}</tbody></table></div>
+      <div class="small">จะนำเข้า <b>${todo.length}</b> ใบ รวม <b>${baht(sum)}</b>${done.length ? ` · ข้าม ${done.length} (นำเข้าแล้ว)` : ""}${miss.length ? ` · <span style="color:var(--bad)">ไม่พบสาขา ${miss.length} ใบ (ต้อง Seed สาขาก่อน)</span>` : ""}</div>
+      <div class="small muted" id="im-pg"></div>
+      <div class="modal-foot" style="margin-top:1rem"><button class="btn ghost" data-close>ปิด</button><button class="btn ok" id="im-go" ${todo.length ? "" : "disabled"}><span class="material-symbols-outlined">move_up</span>นำเข้า ${todo.length} ใบ</button></div>`;
+    q2("#im-go").onclick = async () => {
+      try {
+        const r = await busy(() => importLegacy(ctx.profile, (n, t) => { q2("#im-pg").textContent = `กำลังนำเข้า ${n}/${t}…`; }), "กำลังนำเข้า…");
+        toast(`นำเข้าแล้ว ${r.imported} ใบ`, "ok", 6000); m.close();
+      } catch (e) { console.error(e); toast(friendlyError(e), "err", 9000); }
+    };
+  }
+
   // ---------- Wire ----------
+  $("#imp").onclick = openImport;
   $("#rst").onclick = openReset;
   $("#seed").onclick = openSeed; $("#bulk").onclick = openBulk; $("#opn").onclick = openOpenClose; $("#cfg").onclick = openSettings;
   $("#snd").onclick = () => { setSound(!isSoundOn()); $("#sndt").textContent = isSoundOn() ? "เสียง: เปิด" : "เสียง: ปิด"; $("#snd .material-symbols-outlined").textContent = isSoundOn() ? "volume_up" : "volume_off"; if (isSoundOn()) beep(); };

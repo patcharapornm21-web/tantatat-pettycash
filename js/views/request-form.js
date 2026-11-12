@@ -53,7 +53,7 @@ export default async function view(root, ctx, { params }) {
           <div class="grid g3 keep" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
             <div class="field"><label>สาขา</label><input class="inp" readonly value="${esc(b ? (String(b.name).startsWith(b.id) ? b.name : `${b.id}-${b.name}`) : ctx.profile.branchId)}"></div>
             <div class="field"><label>ผู้ยื่นใบเบิก</label><input class="inp" readonly value="${esc(ctx.profile.name)}"></div>
-            <div class="field"><label for="fdate">วันที่ในเอกสาร * <span class="small muted">(กำหนดเดือน/เลขที่เอกสาร — เบิกย้อนหลังได้)</span></label><input class="inp" id="fdate" type="date" value="${form.date}" max="${todayISO()}" ${editReq ? "disabled" : ""}></div>
+            <div class="field"><label for="fdate">วันที่ในเอกสาร * <span class="small muted">(กำหนดเดือน/เลขที่เอกสาร — เบิกย้อนหลังได้)</span></label><input class="inp" id="fdate" type="date" value="${form.date}" max="${todayISO()}"></div>
           </div>
           <div class="field" style="margin-top:1rem"><label for="fnote">หมายเหตุใบเบิก</label>
             <textarea class="inp" id="fnote" placeholder="เช่น ค่าใช้จ่ายประจำเดือน">${esc(form.note)}</textarea></div>
@@ -98,7 +98,7 @@ export default async function view(root, ctx, { params }) {
   };
 
   const wire = () => {
-    const syncTop = () => { form.note = $("#fnote").value; if ($("#freason")) form.editReason = $("#freason").value; if (!editReq) form.date = $("#fdate").value || todayISO(); };
+    const syncTop = () => { form.note = $("#fnote").value; if ($("#freason")) form.editReason = $("#freason").value; if ($("#fdate")) form.date = $("#fdate").value || todayISO(); };
     $("#fnote").oninput = syncTop; if ($("#fdate")) $("#fdate").onchange = syncTop;
     const open = (idx = null) => { syncTop(); itemModal(idx); };
     $("#add") && ($("#add").onclick = () => open());

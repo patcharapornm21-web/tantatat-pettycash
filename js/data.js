@@ -11,6 +11,8 @@ import {
   query, where, orderBy, limit, increment, serverTimestamp, writeBatch, runTransaction, arrayUnion,
 } from "./fb.js";
 import { makeDocNo, monthKey, round2, STATUS } from "./utils.js";
+import { LEGACY_DOCS } from "./migrate-data.js";
+import { APP_SETTINGS } from "./firebase-config.js";
 import { uploadToCloudinary, cloudinaryEnabled } from "./image.js";
 
 export const summaryRef = () => doc(db, "meta", "summary");
@@ -181,7 +183,7 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
   }
 
   const bid = profile.branchId;
-  const ym = editReq ? editReq.month : monthKey(form.date);
+  const ym = monthKey(form.date); // แก้ไขวันที่ในเอกสารได้ → เดือน/เลขที่เอกสารจัดใหม่ตามวันที่
   const now = Date.now();
 
   const res = await runTransaction(db, async (tx) => {
@@ -242,8 +244,13 @@ export async function submitRequest(profile, branch, form, editReq = null, setti
     tx.update(summaryRef(), { [`${bid}.pendingAmt`]: increment(dPend), [`${bid}.pendingCnt`]: increment(dCnt), [`${bid}.balance`]: increment(-dDeduct) });
     return { id, docNo, total };
   });
-  if (!editReq) { // เลขที่เอกสารเรียงตามวันที่ในเอกสาร: ใบที่ลงวันที่ก่อนจะได้เลขก่อน (ใบหลังขยับเลขตาม)
-    try { const map = await renumberBranchMonth(bid, ym); if (map[res.id]) res.docNo = map[res.id]; } catch (e) { console.warn("renumber", e); }
+  // เลขที่เอกสารเรียงตามวันที่ในเอกสาร: ใบที่ลงวันที่ก่อนจะได้เลขก่อน (ใบหลังขยับเลขตาม)
+  // ใบใหม่ → จัดเลขเดือนนั้น · แก้ไขแล้ววันที่เปลี่ยน → จัดเลขทั้งเดือนใหม่และเดือนเดิม (ถ้าข้ามเดือน)
+  if (!editReq || editReq.date !== form.date || editReq.month !== ym) {
+    try {
+      const map = await renumberBranchMonth(bid, ym); if (map[res.id]) res.docNo = map[res.id];
+      if (editReq && editReq.month !== ym) await renumberBranchMonth(bid, editReq.month);
+    } catch (e) { console.warn("renumber", e); }
   }
   return res;
 }
@@ -458,4 +465,73 @@ export async function resetBranchData(branchIds, onProgress) {
     onProgress && onProgress(id);
   }
   return out;
+}
+
+// ------------------------------------------------------------------
+//  นำเข้าข้อมูลย้ายระบบ + แนบไฟล์ภายหลัง (เฉพาะฝ่ายบัญชี)
+// ------------------------------------------------------------------
+export const legacyDocId = (d) => `${d.branchId}_${d.date.slice(0, 7).replace("-", "")}_i${d.date.slice(8)}${d.status[0]}`;
+
+/** ตรวจว่าใบไหนนำเข้าแล้ว (ใช้ id ตายตัว จึงนำเข้าซ้ำไม่ได้) */
+export async function previewLegacy() {
+  const out = [];
+  for (const d of LEGACY_DOCS) {
+    const [rs, bs] = await Promise.all([getDoc(requestRef(legacyDocId(d))), getDoc(branchRef(d.branchId))]);
+    out.push({ ...d, id: legacyDocId(d), exists: rs.exists(), branch: bs.exists() ? bs.data() : null, total: round2(d.items.reduce((s, i) => s + i.amount, 0)) });
+  }
+  return out;
+}
+
+/**
+ * นำเข้าใบเบิกย้อนหลัง: approved/pending = หักยอดคงเหลือสาขา (pending เพิ่มยอดรออนุมัติ) · replenished = ไม่กระทบยอด
+ * เลขที่เอกสารจัดตามวันที่ในเอกสารของแต่ละสาขา
+ */
+export async function importLegacy(profile, onProgress = () => {}) {
+  const list = (await previewLegacy()).filter((d) => !d.exists && d.branch);
+  const months = new Set(); let n = 0;
+  for (const d of list) {
+    const b = d.branch, ym = d.date.slice(0, 7), now = Date.now();
+    const who = d.items[0].requester || "สาขา";
+    const history = [{ action: "submit", by: who, role: "branch", at: now, comment: "นำเข้าจากระบบเดิม" }];
+    if (d.status !== "pending") history.push({ action: "approved", by: "นำเข้าจากระบบเดิม", role: "accounting", at: now, comment: "" });
+    if (d.status === "replenished") history.push({ action: "replenished", by: "นำเข้าจากระบบเดิม", role: "accounting", at: now, comment: "โอนชดเชยแล้ว (ระบบเดิม)" });
+    const batch = writeBatch(db);
+    batch.set(requestRef(d.id), {
+      docNo: makeDocNo(b.abbr || "B" + d.branchId, ym, 1), branchId: d.branchId, branchName: b.name, region: b.region, month: ym,
+      date: d.date, note: "นำเข้าจากระบบเดิม", requesterUid: profile.uid, requesterName: who,
+      items: d.items, total: d.total, status: d.status, history, comment: "", imported: true,
+      createdAt: serverTimestamp(), updatedAt: now,
+      ...(d.status !== "pending" ? { decidedByName: "นำเข้าจากระบบเดิม", decidedAt: now } : {}),
+      ...(d.status === "replenished" ? { replenishedAt: now } : {}),
+    });
+    if (d.status !== "replenished") {
+      const bp = { balance: increment(-d.total) };
+      if (d.status === "pending") { bp.pendingAmt = increment(d.total); bp.pendingCnt = increment(1); }
+      batch.update(branchRef(d.branchId), bp);
+      batch.update(summaryRef(), Object.fromEntries(Object.entries(bp).map(([k, v]) => [`${d.branchId}.${k}`, v])));
+    }
+    await batch.commit(); n++; months.add(`${d.branchId}|${ym}`); onProgress(n, list.length);
+  }
+  for (const k of months) { const [bid, ym] = k.split("|"); await renumberBranchMonth(bid, ym); }
+  return { imported: n, skipped: LEGACY_DOCS.length - n };
+}
+
+/** บัญชีแนบรูป/PDF เพิ่มให้รายการของใบเบิก (ไม่ต้องส่งอนุมัติใหม่) files = [{data, kind, name}] */
+export async function attachReceipts(reqId, itemIndex, files, profile) {
+  if (!files.length) return;
+  const rs = await getDoc(requestRef(reqId));
+  if (!rs.exists()) throw new Error("ไม่พบใบเบิกนี้");
+  const r = rs.data(); const it = r.items[itemIndex]; if (!it) throw new Error("ไม่พบรายการ");
+  const meta = [...(it.fileMeta || (it.hasReceipt ? [{ kind: "image", name: "" }] : []))];
+  if (meta.length + files.length > APP_SETTINGS.maxFilesPerItem) throw new Error(`แนบได้สูงสุด ${APP_SETTINGS.maxFilesPerItem} ไฟล์ต่อรายการ`);
+  const batch = writeBatch(db);
+  files.forEach((f, k) => {
+    batch.set(doc(db, "receipts", receiptId(reqId, itemIndex, meta.length + k)), { requestId: reqId, branchId: r.branchId, region: r.region, data: f.data, kind: f.kind || "image" });
+  });
+  const items = r.items.map((x, i) => (i === itemIndex ? { ...x, hasReceipt: true, fileMeta: [...meta, ...files.map((f) => ({ kind: f.kind || "image", name: (f.name || "").slice(0, 80) }))] } : x));
+  batch.update(requestRef(reqId), {
+    items, updatedAt: Date.now(),
+    history: arrayUnion({ action: "attached", by: profile.name, role: "accounting", at: Date.now(), comment: `แนบไฟล์ ${files.length} ไฟล์ ที่รายการ ${itemIndex + 1}` }),
+  });
+  await batch.commit();
 }

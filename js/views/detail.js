@@ -1,12 +1,14 @@
 import { esc, baht, money, thDate, dateRange, thDateTime, statusChip, STATUS, $, $$ } from "../utils.js";
-import { subRequest, loadReceipts, decideRequest, decideItems, cancelRequest } from "../data.js";
+import { subRequest, loadReceipts, decideRequest, decideItems, cancelRequest, attachReceipts } from "../data.js";
 import { pageHeader, toast, busy, friendlyError, confirmDialog, openModal } from "../ui.js";
 import { viewFile, thumbCell } from "./request-form.js";
 import { openReplenishModal } from "./replenish.js";
 import { bus } from "../app.js";
 import { ensureSignature } from "../signature.js";
+import { compressImage } from "../image.js";
+import { APP_SETTINGS } from "../firebase-config.js";
 
-const ACTION_LABEL = { submit: "ส่งใบเบิก", resubmit: "แก้ไขและส่งใหม่", approved: "อนุมัติ", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข", replenished: "โอนชดเชย", edited: "แก้ไขและส่งอนุมัติใหม่", cancelled: "ยกเลิกเอกสาร" };
+const ACTION_LABEL = { submit: "ส่งใบเบิก", resubmit: "แก้ไขและส่งใหม่", approved: "อนุมัติ", rejected: "ปฏิเสธ", returned: "ส่งกลับแก้ไข", replenished: "โอนชดเชย", edited: "แก้ไขและส่งอนุมัติใหม่", cancelled: "ยกเลิกเอกสาร", attached: "แนบไฟล์" };
 
 export default async function view(root, ctx, { params }) {
   const id = params[0];
@@ -39,7 +41,7 @@ export default async function view(root, ctx, { params }) {
       <div class="stack">
         <div class="card">
           <div class="row between wrap" style="margin-bottom:1rem">
-            <div class="row wrap"><span class="docbadge">${esc(r.docNo)}</span>${statusChip(st)}</div>
+            <div class="row wrap"><span class="docbadge">${esc(r.docNo)}</span>${statusChip(st)}${r.imported ? `<span class="tag">นำเข้าจากระบบเดิม</span>` : ""}</div>
             <div class="right"><div class="small muted">ยอดรวมสุทธิ</div><div class="num" style="font-size:30px;font-weight:700;line-height:36px">${baht(r.total)}</div></div>
           </div>
           <div class="grid g3 keep" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));font-size:13px">
@@ -57,7 +59,8 @@ export default async function view(root, ctx, { params }) {
             <td>${esc(it.desc || "-")}</td><td><b>${esc(it.supplier || "-")}</b>${it.note ? `<div class="tiny muted">${esc(it.note)}</div>` : ""}${it.wht ? `<div><span class="tag">WHT ${it.wht.rate}% · ก่อนหัก ${money(it.wht.before)} · หัก ${money(it.wht.amount)}</span></div>` : ""}</td>
             <td class="small">${esc(it.docType || "-")}</td><td><span class="cat-chip">${esc(it.category)}</span></td><td>${esc(it.requester || r.requesterName || "")}</td>
             <td class="r num"><b>${money(it.amount)}</b></td>
-            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>` : receipts[i] ? thumbCell(receipts[i], i) : `<span class="small muted">กำลังโหลด…</span>`}</td>${showRev ? `<td>${rv ? `<span class="chip ${MARK[rv.s][1]}">${MARK[rv.s][0]}</span>${rv.note ? `<div class="tiny muted">${esc(rv.note)}</div>` : ""}` : `<span class="tiny muted">${decide ? "ยังไม่ได้เลือก" : ""}</span>`}</td>` : ""}</tr>`; }).join("")}
+            <td class="c">${!it.hasReceipt ? `<span class="chip st-pending">ไม่มีไฟล์แนบ</span>` : receipts[i] ? thumbCell(receipts[i], i) : `<span class="small muted">กำลังโหลด…</span>`}
+              ${ctx.role === "accounting" ? `<div class="no-print" style="margin-top:.35rem">${it.driveUrl ? `<a class="tiny" href="${esc(it.driveUrl)}" target="_blank" rel="noopener">ไฟล์เดิมใน Drive</a><br>` : ""}<button class="btn soft sm" data-att="${i}" type="button"><span class="material-symbols-outlined" style="font-size:16px">attach_file</span>แนบไฟล์</button></div>` : ""}</td>${showRev ? `<td>${rv ? `<span class="chip ${MARK[rv.s][1]}">${MARK[rv.s][0]}</span>${rv.note ? `<div class="tiny muted">${esc(rv.note)}</div>` : ""}` : `<span class="tiny muted">${decide ? "ยังไม่ได้เลือก" : ""}</span>`}</td>` : ""}</tr>`; }).join("")}
           </tbody><tfoot><tr><td colspan="${7 + (decide ? 1 : 0)}" class="r muted">รวมทั้งสิ้น</td><td class="r num"><b style="font-size:16px">${money(r.total)}</b></td><td></td>${showRev ? "<td></td>" : ""}</tr></tfoot></table></div>
         </div>
 
@@ -123,6 +126,24 @@ export default async function view(root, ctx, { params }) {
     };
     const rp = $("#repl");
     if (rp) rp.onclick = () => { const b = ctx.summary && ctx.summary[req.branchId]; if (b) openReplenishModal(ctx, b); else toast("ยังไม่พบข้อมูลสาขาใน Summary", "warn"); };
+    $$("[data-att]").forEach((b) => (b.onclick = () => {
+      const inp = document.createElement("input"); inp.type = "file"; inp.multiple = true; inp.accept = "image/*,application/pdf";
+      inp.onchange = async () => {
+        const out = [];
+        try {
+          for (const f of inp.files) {
+            if (f.type === "application/pdf") {
+              if (f.size > APP_SETTINGS.maxPdfKB * 1024) { toast(`${f.name} ใหญ่เกิน ${APP_SETTINGS.maxPdfKB}KB`, "warn", 6000); continue; }
+              out.push({ kind: "pdf", name: f.name, data: await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); }) });
+            } else out.push({ kind: "image", name: f.name, data: (await compressImage(f)).dataUrl });
+          }
+          if (!out.length) return;
+          await busy(() => attachReceipts(req.id, +b.dataset.att, out, ctx.profile), "กำลังแนบไฟล์…");
+          toast(`แนบ ${out.length} ไฟล์ที่รายการ ${+b.dataset.att + 1} แล้ว`, "ok");
+        } catch (e) { console.error(e); toast(friendlyError(e), "err", 7000); }
+      };
+      inp.click();
+    }));
     const cmt = $("#cmt"); if (cmt) cmt.oninput = () => (cmtDraft = cmt.value);
     const sa = $("#sel-all"); if (sa) sa.onchange = () => { sel.clear(); if (sa.checked) req.items.forEach((_, i) => sel.add(i)); draw(); };
     $$("[data-sel]").forEach((c) => (c.onchange = () => { c.checked ? sel.add(+c.dataset.sel) : sel.delete(+c.dataset.sel); draw(); }));
