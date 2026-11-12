@@ -98,7 +98,7 @@ export default async function view(root, ctx) {
         <td class="r num">${money(b.float)}</td>
         <td><div class="num" style="font-weight:700;${b.balance < 0 ? "color:var(--bad)" : ""}">${money(b.balance)}</div><div class="progress ${cls}" style="height:6px;margin-top:4px"><div style="width:${p}%"></div></div></td>
         <td class="r num">${money(used)}</td>
-        <td class="r num">${b.pendingCnt ? `<span class="chip st-pending">${b.pendingCnt} · ${money(b.pendingAmt)}</span>` : '<span class="muted">-</span>'}</td>
+        <td class="r num">${b.pendingCnt ? `<span class="chip st-pending">${b.pendingCnt} ใบ · ฿${money(b.pendingAmt)}</span>` : '<span class="muted">-</span>'}</td>
         <td class="r" style="white-space:nowrap"><button class="btn ok sm" data-repl="${esc(b.id)}" ${isOpen(b) ? "" : "disabled"}><span class="material-symbols-outlined">payments</span>ชดเชย</button>
           <button class="icon-btn" data-edit="${esc(b.id)}" aria-label="แก้ไขสาขา"><span class="material-symbols-outlined">edit</span></button></td></tr>`;
     }).join("");

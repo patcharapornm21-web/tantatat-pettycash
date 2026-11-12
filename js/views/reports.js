@@ -88,15 +88,27 @@ export default async function view(root, ctx) {
     return [head, ...body];
   };
 
+  const load = async (from, to, branchId) => {
+    try {
+      st.data = await busy(() => fetchReportRequests({ role, region: ctx.profile.region, branchId: role === "branch" ? ctx.profile.branchId : branchId, fromMonth: from, toMonth: to }), "กำลังสร้างรายงาน…");
+      st.loaded = { from, to, branchId };
+      st.exported = new Set(); paint();
+      toast(`โหลด ${st.data.length} ใบเบิก`, "info");
+    } catch (e) { console.error(e); toast(friendlyError(e), "err", 8000); }
+  };
   $("#run").onclick = async () => {
     st.from = $("#f-from").value; st.to = $("#f-to").value;
     if (st.from > st.to) { [st.from, st.to] = [st.to, st.from]; }
     st.branchId = $("#f-br") ? $("#f-br").value : ""; st.category = $("#f-cat").value; st.status = $("#f-st").value;
-    try {
-      st.data = await busy(() => fetchReportRequests({ role, region: ctx.profile.region, branchId: role === "branch" ? ctx.profile.branchId : st.branchId, fromMonth: st.from, toMonth: st.to }), "กำลังสร้างรายงาน…");
-      st.exported = new Set(); paint();
-      toast(`โหลด ${st.data.length} ใบเบิก`, "info");
-    } catch (e) { console.error(e); toast(friendlyError(e), "err", 8000); }
+    await load(st.from, st.to, st.branchId);
+  };
+  // เปลี่ยนสาขาหลังสร้างรายงานแล้ว → แสดงผลอัตโนมัติ (เปลี่ยนเดือนต้องกดสร้างรายงานใหม่)
+  if ($("#f-br")) $("#f-br").onchange = async () => {
+    if (!st.data || !st.loaded) return;
+    if ($("#f-from").value !== st.loaded.from || $("#f-to").value !== st.loaded.to) { toast("เปลี่ยนช่วงเดือนแล้ว กรุณากด “สร้างรายงาน”", "info"); return; }
+    st.branchId = $("#f-br").value; st.category = $("#f-cat").value; st.status = $("#f-st").value;
+    if (st.loaded.branchId === "" || st.loaded.branchId === st.branchId) paint(); // มีข้อมูลครบแล้ว กรองในเครื่อง ไม่เสียโควต้า
+    else await load(st.loaded.from, st.loaded.to, st.branchId);
   };
   ["f-cat", "f-st"].forEach((id) => ($("#" + id).onchange = () => { if (!st.data) return; st.category = $("#f-cat").value; st.status = $("#f-st").value; paint(); }));
 
